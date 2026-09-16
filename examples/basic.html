@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>arm64js example</title>
+<pre id="out">booting…</pre>
+<script type="module">
+  // From npm: import { Arm64JS } from 'arm64js';
+  import { Arm64JS } from '../dist/index.js';
+
+  const out = document.getElementById('out');
+  const log = (s) => (out.textContent += '\n' + s);
+  try {
+    const vm = await Arm64JS.boot('alpine', { onProgress: (p) => log(`${p.stage} ${p.done ?? ''}`) });
+    log(`running ${await Arm64JS.mode()} on engine ${await Arm64JS.engine()}`);
+    const r = await vm.exec('uname -a && cat /etc/alpine-release');
+    log(`exit ${r.exitCode}\n${r.output}`);
+    const snap = await vm.snapshot({ name: 'example' });
+    log(`saved ${snap.id.slice(0, 12)}… (${snap.sizeBytes} bytes)`);
+    await vm.dispose();
+  } catch (e) {
+    log(`${e.code ?? 'error'}: ${e.message}`);
+  }
+</script>

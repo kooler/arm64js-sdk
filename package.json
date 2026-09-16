@@ -1,0 +1,53 @@
+{
+  "name": "arm64js",
+  "version": "0.3.0",
+  "description": "Run a Linux VM inside your web page. Boots Alpine from the arm64js CDN, runs commands, keeps snapshots in the browser.",
+  "type": "module",
+  "license": "MIT",
+  "repository": "github:kooler/arm64js-sdk",
+  "homepage": "https://arm64js.com",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./terminal": {
+      "types": "./dist/terminal.d.ts",
+      "default": "./dist/terminal.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "stamp": "node scripts/stamp-version.mjs",
+    "build": "npm run stamp && tsc -p tsconfig.build.json",
+    "typecheck": "npm run stamp && tsc --noEmit",
+    "test": "npm run stamp && vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "@xterm/addon-fit": "^0.10.0 || ^0.11.0",
+    "@xterm/xterm": "^5.5.0 || ^6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@xterm/addon-fit": {
+      "optional": true
+    },
+    "@xterm/xterm": {
+      "optional": true
+    }
+  }
+}

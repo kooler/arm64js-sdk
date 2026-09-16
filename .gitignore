@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# Generated from package.json by scripts/stamp-version.mjs.
+src/version.ts

@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>arm64js terminal example</title>
+<!-- From npm, with a bundler: import { attachTerminal } from 'arm64js/terminal';
+     and import '@xterm/xterm/css/xterm.css'. Here, straight from node_modules. -->
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+<script type="importmap">
+  {
+    "imports": {
+      "@xterm/xterm": "../node_modules/@xterm/xterm/lib/xterm.mjs",
+      "@xterm/addon-fit": "../node_modules/@xterm/addon-fit/lib/addon-fit.mjs"
+    }
+  }
+</script>
+<div id="term" style="height: 480px"></div>
+<script type="module">
+  import { Arm64JS } from '../dist/index.js';
+  import { attachTerminal } from '../dist/terminal.js';
+
+  const vm = await Arm64JS.boot('alpine');
+  const term = attachTerminal(vm, document.getElementById('term'));
+  term.xterm.focus();
+</script>
