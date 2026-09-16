@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>arm64js files example</title>
+<p>
+  <input id="files" type="file" multiple disabled />
+  <button id="download" disabled>Download /root/report.txt</button>
+</p>
+<pre id="out">booting…</pre>
+<script type="module">
+  // From npm: import { Arm64JS } from 'arm64js';
+  import { Arm64JS } from '../dist/index.js';
+
+  const out = document.getElementById('out');
+  const log = (s) => (out.textContent += '\n' + s);
+  const report = (e) => log(`${e.code ?? 'error'}: ${e.message}`);
+  const run = async (vm, script) => {
+    const r = await vm.exec(script);
+    log(`$ ${script}\n${r.output}`);
+  };
+  try {
+    const vm = await Arm64JS.boot('alpine');
+    log(`running ${await Arm64JS.mode()} on engine ${await Arm64JS.engine()}`);
+
+    // A small file, copied into the guest.
+    await vm.writeFile('/root/hello.sh', '#!/bin/sh\necho hello from the page\n', { mode: 0o755 });
+    await run(vm, '/root/hello.sh');
+
+    // A file the guest made, copied out and saved.
+    await vm.exec('uname -a > /root/report.txt; ls -la / >> /root/report.txt');
+    const download = document.getElementById('download');
+    download.disabled = false;
+    download.onclick = () =>
+      (async () => {
+        const blob = await vm.readFile('/root/report.txt');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'report.txt';
+        a.click();
+      })().catch(report);
+
+    // Files the visitor picks, read in place: their size does not matter.
+    // One change at a time: the next waits for the last to finish.
+    const input = document.getElementById('files');
+    input.disabled = false;
+    let picked = null;
+    let applying = Promise.resolve();
+    input.onchange = () => {
+      const files = [...input.files];
+      applying = applying
+        .then(async () => {
+          await picked?.unmount();
+          picked = null;
+          if (files.length === 0) return;
+          picked = await vm.mount(files, '/data');
+          await run(vm, 'ls -la /data && sha256sum /data/*');
+        })
+        .catch(report);
+    };
+  } catch (e) {
+    report(e);
+  }
+</script>

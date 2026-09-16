@@ -21,7 +21,13 @@ const { output, exitCode } = await vm.exec('apk add --no-cache curl');
 
 it returns raw `output` and `exitCode` so that you can verify if it worked.
 
-The VM doesn't have access to the internet except the apk registry, so if you'd like it to work with some custom data you need to copy that data into the VM.
+The VM doesn't have access to the internet except the apk registry. To give it your own data, copy files in or mount them (`vm.writeFile` and `vm.mount` below):
+
+```js
+await vm.writeFile('/root/data.csv', file); // a copy, kept in guest memory
+const result = await vm.readFile('/root/result.txt'); // a copy out, as a Blob
+await vm.mount({ 'model.bin': bigFile }, '/data'); // read in place, any size
+```
 
 ```js
 import { Arm64JS } from 'arm64js';
@@ -94,6 +100,42 @@ Type into the guest's console and set its terminal size, for wiring up a termina
 
 The guest's run ended (it halted, or faulted). Every later call on the VM rejects with `vm-exited`.
 
+### `vm.writeFile(path, data, { mode?, timeoutMs? })`
+
+Copies `data` (a `Blob` or `File`, bytes, or a string) into the guest as the file `path`, an absolute guest path. An existing file is replaced, and a missing folder is created. `mode` sets the permission bits, e.g. `0o755` for a script.
+
+The copy is kept in guest memory, like everything the guest writes, so it has to fit there (`alpine` has 1 GiB). Mount a large file instead. The default timeout is two minutes plus one second per MiB.
+
+### `vm.readFile(path, { maxBytes?, timeoutMs? })` → `Blob`
+
+Copies the guest's file `path` out. The copy is kept in page memory. A file larger than `maxBytes` (default 1 GiB, the guest's memory) is refused with `read-failed`, so a program in the guest can't fill your page's memory. The default timeout is ten minutes. To let the visitor save the file:
+
+```js
+const blob = await vm.readFile('/root/report.pdf');
+const a = document.createElement('a');
+a.href = URL.createObjectURL(blob);
+a.download = 'report.pdf';
+a.click();
+```
+
+### `vm.mount(files, path)` → `{ path, unmount() }`
+
+Makes files from your page visible in the guest, read-only, in the folder `path`, which is created if missing. `files` is a record of names to Blobs (`{ 'data.bin': blob }`), or a list of Files (`input.files`, a drop's `dataTransfer.files`).
+
+Nothing is copied up front: the guest reads each file as it needs it. So file size does not matter, and a file larger than the guest's memory works too. To change a file, copy it first (`cp /data/data.bin /root/`). A path that is already mounted is refused with `invalid-input`; `unmount` it first.
+
+Keep in mind:
+
+- **Mounts are not saved in snapshots.** After you boot a snapshot, mount again. Mounts left over in the snapshot are removed first.
+- **Some paths can't be mounted over.** A path that would cover `/`, `/bin`, `/dev`, `/etc`, `/lib`, `/proc`, `/run`, `/sbin`, `/sys`, `/tmp` or `/usr` is refused with `invalid-input`, because the VM could then no longer run commands. So is anything under `/run/arm64js/share`, where the SDK keeps its own files. A folder inside the others, like `/usr/local/data` or `/tmp/in`, is fine.
+- **If file sharing stops, its mounts are gone.** Calls that were waiting reject (`mount-failed`, `write-failed` or `read-failed`), the next `mount`, `writeFile` or `readFile` starts sharing again, and you need to mount again.
+- **The VM waits on file operations.** While the guest waits for a file operation, the whole VM waits too.
+- **Requirements.** `mount`, `writeFile` and `readFile` need engine 0.4 or newer and a VM from an image built with file sharing (images on the CDN include it from engine 0.4 on). Otherwise they reject with `share-unavailable`.
+
+### `vm.unmount(path)`
+
+Undoes a `mount`. If nothing is mounted at `path` (including when a program in the guest already unmounted it), it does nothing. While a program in the guest still uses the files, it rejects with `mount-failed`.
+
 ### `vm.snapshot({ name?, meta? })` → `SnapshotInfo`
 
 Saves the VM into this origin's browser storage (OPFS) and keeps it running. `meta` is any JSON up to 16 KiB, returned as stored by `snapshots.list()`. Only what changed since the image is written; the image's own data stays on the CDN and is fetched again when needed.
@@ -118,7 +160,7 @@ Disposes every VM and, in frame mode, the frame.
 
 ### Errors
 
-Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `contract-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`.
+Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `contract-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `write-failed`, `read-failed`.
 
 ## Terminal (optional)
 
@@ -152,6 +194,8 @@ Most engine releases change nothing about the snapshot format, and snapshots sav
 - treat snapshots as a cache: catch `engine-mismatch`, `Arm64JS.snapshots.remove(id)`, and boot the image again.
 
 `SnapshotInfo.engine` says which engine each one needs.
+
+One exception: a snapshot saved on engine 0.4 or newer from an image with file sharing does not boot on engine 0.3. It fails with `boot-failed`.
 
 ## Development
 

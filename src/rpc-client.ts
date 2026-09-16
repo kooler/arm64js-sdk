@@ -16,12 +16,15 @@ import {
   type ExecOptions,
   type ExecResult,
   type Host,
+  type MountFiles,
   type OutputInfo,
+  type ReadFileOptions,
   type RpcCall,
   type RpcEvent,
   type RpcMessage,
   type SnapshotOptions,
   type VmExit,
+  type WriteFileOptions,
 } from './contract.js';
 
 /// The port shape both ends use (a `MessagePort`, or a double in tests).
@@ -46,6 +49,19 @@ export function isRpc(data: unknown): data is RpcMessage {
 export interface ClientTimers {
   setInterval(cb: () => void, ms: number): unknown;
   clearInterval(handle: unknown): void;
+}
+
+/// Reports an engine without the file-sharing ops as `share-unavailable`. Older
+/// servers (engine 0.3) refuse them with the message `unknown op: <op>`, and that
+/// is all there is to match on.
+function fileOp<T>(p: Promise<T>): Promise<T> {
+  return p.catch((e: unknown) => {
+    const err = e as { code?: string; message?: string };
+    if (err?.code === 'invalid-input' && /^unknown op: /.test(err.message ?? '')) {
+      throw new Arm64JSError('share-unavailable', 'this engine cannot share files; it needs engine 0.4 or newer');
+    }
+    throw e;
+  });
 }
 
 /// A `Host` over a port to an `RpcServer`. `lost` fires once when the other end
@@ -144,7 +160,14 @@ export class RpcClient implements Host {
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
       if (onProgress) this.progress.set(id, onProgress);
-      this.port.postMessage({ kind: RPC_KIND, v: 1, id, op, args } satisfies RpcCall);
+      try {
+        this.port.postMessage({ kind: RPC_KIND, v: 1, id, op, args } satisfies RpcCall);
+      } catch (e) {
+        // An argument that cannot be cloned.
+        this.pending.delete(id);
+        this.progress.delete(id);
+        reject(new Arm64JSError('invalid-input', `${op}: ${String((e as Error)?.message ?? e)}`));
+      }
     });
   }
 
@@ -182,6 +205,22 @@ export class RpcClient implements Host {
 
   resize(vmId: string, cols: number, rows: number): Promise<void> {
     return this.call<void>('resize', [vmId, cols, rows]);
+  }
+
+  mount(vmId: string, files: MountFiles, path: string): Promise<void> {
+    return fileOp(this.call<void>('mount', [vmId, files, path]));
+  }
+
+  unmount(vmId: string, path: string): Promise<void> {
+    return fileOp(this.call<void>('unmount', [vmId, path]));
+  }
+
+  writeFile(vmId: string, path: string, data: Blob, opts: WriteFileOptions = {}): Promise<void> {
+    return fileOp(this.call<void>('writeFile', [vmId, path, data, opts]));
+  }
+
+  readFile(vmId: string, path: string, opts: ReadFileOptions = {}): Promise<Blob> {
+    return fileOp(this.call<Blob>('readFile', [vmId, path, opts]));
   }
 
   onExit(vmId: string, cb: (exit: VmExit) => void): () => void {

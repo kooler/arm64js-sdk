@@ -3,6 +3,9 @@
 //   import { Arm64JS } from 'arm64js';
 //   const vm = await Arm64JS.boot('alpine');
 //   const { output, exitCode } = await vm.exec('apk add --no-cache curl && curl --version');
+//   await vm.writeFile('/root/data.csv', file);            // a Blob or File
+//   const out = await vm.readFile('/root/result.txt');     // a Blob
+//   await vm.mount({ 'big.bin': file }, '/data');          // read in place
 //   const snap = await vm.snapshot({ name: 'with curl' });
 //   await vm.dispose();
 //   // later, after a reload:
@@ -22,11 +25,13 @@ import {
   type ExecResult,
   type Host,
   type OutputInfo,
+  type ReadFileOptions,
   type RuntimeModule,
   type SnapshotInfo,
   type SnapshotOptions,
   type StorageStatus,
   type VmExit,
+  type WriteFileOptions,
 } from './contract.js';
 import { mountFrameHost, type FrameDeps } from './frame-host.js';
 import { defaultEngine, frameUrl, resolveEngine, runtimeModuleUrl, type EngineSpec } from './loader.js';
@@ -51,6 +56,79 @@ function noConsoleInput(): Arm64JSError {
   return new Arm64JSError('invalid-input', 'this engine has no console input; it needs engine 0.3 or newer');
 }
 
+function noFileSharing(): Arm64JSError {
+  return new Arm64JSError('share-unavailable', 'this engine cannot share files; it needs engine 0.4 or newer');
+}
+
+/// What `mount` takes: a record of file name → Blob, or a list of Files (an
+/// `<input type=file>`'s `files`, a drop's).
+export type MountSource = Record<string, Blob> | Iterable<File> | ArrayLike<File>;
+
+/// What `writeFile` takes.
+export type FileData = Blob | BufferSource | string;
+
+/// A live `mount`.
+export interface Mount {
+  /** Where the files are in the guest. */
+  readonly path: string;
+  /** Remove the mount. Idempotent. */
+  unmount(): Promise<void>;
+}
+
+/// `path` with repeated and trailing slashes dropped, so one folder has one key.
+/// The runtime checks the rest.
+function guestPath(path: string): string {
+  if (typeof path !== 'string' || !path.startsWith('/')) {
+    throw new Arm64JSError('invalid-input', `the path must be an absolute guest path, not ${JSON.stringify(path)}`);
+  }
+  return `/${path
+    .split('/')
+    .filter((p) => p !== '' && p !== '.')
+    .join('/')}`;
+}
+
+/// The record of Blobs the runtime takes.
+function mountFiles(source: MountSource): Record<string, Blob> {
+  const files = recordOf(source);
+  if (Object.keys(files).length === 0) throw new Arm64JSError('invalid-input', 'mount: no files to share');
+  return files;
+}
+
+function recordOf(source: MountSource): Record<string, Blob> {
+  if (!source || typeof source !== 'object') {
+    throw new Arm64JSError('invalid-input', 'mount takes a record of Blobs or a list of Files');
+  }
+  if (source instanceof Blob)
+    throw new Arm64JSError('invalid-input', 'mount: name the Blob, e.g. { "data.bin": blob }');
+  const list = source as Partial<Iterable<File>> & Partial<ArrayLike<File>>;
+  if (typeof list[Symbol.iterator] === 'function' || typeof list.length === 'number') {
+    return filesRecord(source as Iterable<File>);
+  }
+  // Checked here: something else (a folder handle) may not even reach the VM's
+  // frame, and then no answer would ever come back.
+  const proto = Object.getPrototypeOf(source);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new Arm64JSError('invalid-input', 'mount takes a record of Blobs or a list of Files');
+  }
+  for (const [name, blob] of Object.entries(source)) {
+    if (!(blob instanceof Blob)) throw new Arm64JSError('invalid-input', `mount: ${name} is not a Blob`);
+  }
+  return source as Record<string, Blob>;
+}
+
+/// A list of Files as the record the runtime takes, named by `File.name`.
+function filesRecord(source: Iterable<File> | ArrayLike<File>): Record<string, Blob> {
+  const record: Record<string, Blob> = Object.create(null);
+  for (const file of Array.from(source as ArrayLike<File>)) {
+    if (!(file instanceof Blob) || typeof (file as { name?: unknown }).name !== 'string') {
+      throw new Arm64JSError('invalid-input', 'mount: every item in a list must be a File');
+    }
+    if (file.name in record) throw new Arm64JSError('invalid-input', `mount: two files are named ${file.name}`);
+    record[file.name] = file;
+  }
+  return record;
+}
+
 /// Await a host call, re-raising its failure as this package's error class.
 function owned<T>(p: Promise<T>): Promise<T> {
   return p.catch(rethrow);
@@ -62,10 +140,12 @@ export type {
   ExecOptions,
   ExecResult,
   OutputInfo,
+  ReadFileOptions,
   SnapshotInfo,
   SnapshotOptions,
   StorageStatus,
   VmExit,
+  WriteFileOptions,
 } from './contract.js';
 export type { EngineSpec } from './loader.js';
 
@@ -89,6 +169,8 @@ export interface Arm64JSDeps {
 /// A running VM.
 export class Vm {
   private disposed = false;
+  /** The latest `mount` at each path, so an old handle cannot undo a newer one. */
+  private readonly mounts = new Map<string, object>();
 
   /** @internal */
   constructor(
@@ -131,6 +213,86 @@ export class Vm {
   onExit(cb: (exit: VmExit) => void): () => void {
     this.check();
     return this.host.onExit(this.id, cb);
+  }
+
+  /** Show files to the guest, read-only, in the folder `path` (an absolute
+   *  guest path, created if missing). A file is read only as the guest asks, so
+   *  its size does not matter. Mounts are not kept in snapshots: mount again
+   *  after booting one. */
+  mount(source: MountSource, path: string): Promise<Mount> {
+    this.check();
+    const { mount } = this.host;
+    if (!mount) return Promise.reject(noFileSharing());
+    let at: string;
+    let files: Record<string, Blob>;
+    try {
+      at = guestPath(path);
+      files = mountFiles(source);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    // Taken before the call, so a handle for an earlier mount here sees it is stale.
+    const token = {};
+    const before = this.mounts.get(at);
+    this.mounts.set(at, token);
+    const handle: Mount = {
+      path: at,
+      unmount: async () => {
+        if (this.mounts.get(at) === token) await this.unmount(at);
+      },
+    };
+    return owned(mount.call(this.host, this.id, files, at)).then(
+      () => handle,
+      (e) => {
+        if (this.mounts.get(at) === token) {
+          if (before) this.mounts.set(at, before);
+          else this.mounts.delete(at);
+        }
+        throw e;
+      },
+    );
+  }
+
+  /** Undo the `mount` at `path`. Idempotent. */
+  unmount(path: string): Promise<void> {
+    this.check();
+    const { unmount } = this.host;
+    if (!unmount) return Promise.reject(noFileSharing());
+    let at: string;
+    try {
+      at = guestPath(path);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    const token = this.mounts.get(at);
+    return owned(unmount.call(this.host, this.id, at)).then(() => {
+      // A mount started meanwhile keeps its token.
+      if (this.mounts.get(at) === token) this.mounts.delete(at);
+    });
+  }
+
+  /** Copy `data` into the guest as the file `path`, replacing it if it exists and
+   *  creating its folder if missing. The file lives in guest memory: for a large
+   *  one, `mount` it instead. */
+  writeFile(path: string, data: FileData, opts?: WriteFileOptions): Promise<void> {
+    this.check();
+    const { writeFile } = this.host;
+    if (!writeFile) return Promise.reject(noFileSharing());
+    let blob: Blob;
+    if (data instanceof Blob) blob = data;
+    else if (typeof data === 'string' || data instanceof ArrayBuffer || ArrayBuffer.isView(data))
+      blob = new Blob([data]);
+    else return Promise.reject(new Arm64JSError('invalid-input', 'writeFile takes a Blob, bytes or a string'));
+    return owned(writeFile.call(this.host, this.id, path, blob, opts));
+  }
+
+  /** Copy the guest's file `path` out, as a `Blob`. The copy is held in page
+   *  memory. */
+  readFile(path: string, opts?: ReadFileOptions): Promise<Blob> {
+    this.check();
+    const { readFile } = this.host;
+    if (!readFile) return Promise.reject(noFileSharing());
+    return owned(readFile.call(this.host, this.id, path, opts));
   }
 
   /** Save the VM to this browser's storage. The VM keeps running. */

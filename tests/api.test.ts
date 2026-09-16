@@ -157,4 +157,109 @@ describe('Arm64JS', () => {
     expect((await sdk.storage.status()).available).toBe(true);
     expect(() => sdk.configure({ engine: 'latest' })).toThrow(/before the first boot/);
   });
+
+  it('shares files: Files by name, Blob records as they are, and writes as Blobs', async () => {
+    const host = fakeHost();
+    const calls: unknown[][] = [];
+    let refuse = false;
+    const sharing = {
+      ...host,
+      mount: async (vmId: string, files: unknown, path: string) => {
+        calls.push(['mount', vmId, files, path]);
+        if (refuse) throw Object.assign(new Error('something is already mounted'), { code: 'invalid-input' });
+      },
+      unmount: async (vmId: string, path: string) => void calls.push(['unmount', vmId, path]),
+      writeFile: async (vmId: string, path: string, data: Blob, opts?: unknown) =>
+        void calls.push(['writeFile', vmId, path, await data.text(), opts]),
+      readFile: async (vmId: string, path: string, opts?: unknown) => (
+        calls.push(['readFile', vmId, path, opts]),
+        new Blob([`read ${path}`])
+      ),
+    };
+    const sdk = createArm64JS({
+      isolated: true,
+      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.4', createHost: () => sharing }),
+    });
+    const vm = await sdk.boot('alpine');
+
+    const note = { 'note.txt': new Blob(['n']) };
+    const m = await vm.mount(note, '/work/');
+    expect(m.path).toBe('/work');
+    expect(calls.at(-1)).toEqual(['mount', 'vm1', note, '/work']);
+    const folder = { kind: 'directory', getFileHandle() {} };
+    await expect(vm.mount(folder as never, '/dir')).rejects.toMatchObject({ code: 'invalid-input' });
+    await expect(vm.mount(new Map() as never, '/map')).rejects.toMatchObject({ code: 'invalid-input' });
+
+    const a = new File(['a'], 'a.txt');
+    const b = new File(['b'], 'b.txt');
+    await vm.mount([a, b], '/in');
+    const record = calls.at(-1)![2] as Record<string, Blob>;
+    expect(Object.keys(record)).toEqual(['a.txt', 'b.txt']);
+    expect(record['a.txt']).toBe(a);
+    await expect(vm.mount([a, new File(['x'], 'a.txt')], '/dup')).rejects.toMatchObject({ code: 'invalid-input' });
+    await expect(vm.mount(new Blob(['x']) as never, '/blob')).rejects.toMatchObject({ code: 'invalid-input' });
+    await expect(vm.mount({ 'x.bin': new Blob(['x']) }, 'relative')).rejects.toMatchObject({ code: 'invalid-input' });
+    const blobs = { 'x.bin': new Blob(['x']) };
+    await vm.mount(blobs, '/x');
+    expect(calls.at(-1)![2]).toBe(blobs);
+
+    await m.unmount();
+    await m.unmount();
+    expect(calls.filter((c) => c[0] === 'unmount')).toEqual([['unmount', 'vm1', '/work']]);
+    // An old handle does not undo a newer mount at the same path.
+    const first = await vm.mount(blobs, '/again');
+    await vm.unmount('/again');
+    await vm.mount(blobs, '/again');
+    await first.unmount();
+    expect(calls.filter((c) => c[0] === 'unmount' && c[2] === '/again')).toHaveLength(1);
+    await expect(vm.mount(null as never, '/n')).rejects.toMatchObject({ code: 'invalid-input' });
+
+    // Nor while the newer mount is still under way.
+    const old = await vm.mount(blobs, '/race');
+    const undoing = vm.unmount('/race');
+    const redoing = vm.mount(blobs, '/race');
+    await old.unmount();
+    await undoing;
+    const fresh = await redoing;
+    expect(calls.filter((c) => c[0] === 'unmount' && c[2] === '/race')).toHaveLength(1);
+    await fresh.unmount();
+    expect(calls.filter((c) => c[0] === 'unmount' && c[2] === '/race')).toHaveLength(2);
+
+    // A refused mount leaves the earlier handle in charge.
+    const live = await vm.mount(blobs, '/busy');
+    refuse = true;
+    await expect(vm.mount(blobs, '/busy')).rejects.toMatchObject({ code: 'invalid-input' });
+    refuse = false;
+    await live.unmount();
+    expect(calls.at(-1)).toEqual(['unmount', 'vm1', '/busy']);
+
+    await vm.writeFile('/etc/motd', 'hello', { mode: 0o644 });
+    await vm.writeFile('/a.bin', new TextEncoder().encode('bytes'));
+    await vm.writeFile('/b.bin', new Blob(['blob']));
+    expect(calls.filter((c) => c[0] === 'writeFile').map((c) => [c[2], c[3]])).toEqual([
+      ['/etc/motd', 'hello'],
+      ['/a.bin', 'bytes'],
+      ['/b.bin', 'blob'],
+    ]);
+    await expect(vm.writeFile('/c', 42 as never)).rejects.toMatchObject({ code: 'invalid-input' });
+    const read = await vm.readFile('/etc/hostname', { timeoutMs: 1000 });
+    expect(await read.text()).toBe('read /etc/hostname');
+    expect(calls.at(-1)).toEqual(['readFile', 'vm1', '/etc/hostname', { timeoutMs: 1000 }]);
+
+    // A disposed VM throws at once, like the other calls.
+    await vm.dispose();
+    expect(() => vm.mount(blobs, '/x')).toThrow(/disposed/);
+    expect(() => vm.unmount('/x')).toThrow(/disposed/);
+
+    // An engine before file sharing says which one is needed.
+    const older = createArm64JS({
+      isolated: true,
+      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.3', createHost: () => fakeHost() }),
+    });
+    const vm2 = await older.boot('alpine');
+    await expect(vm2.writeFile('/x', 'x')).rejects.toMatchObject({ code: 'share-unavailable', message: /0\.4/ });
+    await expect(vm2.readFile('/x')).rejects.toMatchObject({ code: 'share-unavailable' });
+    await expect(vm2.mount(blobs, '/x')).rejects.toMatchObject({ code: 'share-unavailable' });
+    await expect(vm2.unmount('/x')).rejects.toMatchObject({ code: 'share-unavailable' });
+  });
 });

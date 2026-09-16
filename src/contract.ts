@@ -45,7 +45,11 @@ export type Arm64JSErrorCode =
   | 'snapshot-not-found'
   | 'snapshot-in-use'
   | 'snapshot-corrupt'
-  | 'invalid-input';
+  | 'invalid-input'
+  | 'share-unavailable'
+  | 'mount-failed'
+  | 'write-failed'
+  | 'read-failed';
 
 /// The error every SDK-facing failure is reported as.
 export class Arm64JSError extends Error {
@@ -83,6 +87,9 @@ export interface ImageRecord {
   name: string;
   version: number;
   builds: ImageBuild[];
+  /** Builds with the file-sharing device. Kept apart from `builds` because older
+   *  runtimes cannot resume them. Absent before engine 0.4. */
+  share_builds?: ImageBuild[];
 }
 
 /// A boot's progress, as the SDK's `onProgress` sees it. `memory` repeats with
@@ -158,6 +165,23 @@ export interface SnapshotInfo {
   meta: unknown;
 }
 
+/// Files for `mount`: name → `Blob`, read-only, read on demand.
+export type MountFiles = Record<string, Blob>;
+
+export interface WriteFileOptions {
+  /** Permission bits for the file, e.g. `0o755`. */
+  mode?: number;
+  /** Fail with `exec-timeout` after this long (default: two minutes plus a second per MiB). */
+  timeoutMs?: number;
+}
+
+export interface ReadFileOptions {
+  /** Fail with `read-failed` for a file larger than this (default: 1 GiB). */
+  maxBytes?: number;
+  /** Fail with `exec-timeout` after this long (default: ten minutes). */
+  timeoutMs?: number;
+}
+
 export interface StorageStatus {
   /** Whether snapshots can be kept at all here. */
   available: boolean;
@@ -192,6 +216,16 @@ export interface Host {
   write?(vmId: string, data: string): Promise<void>;
   /** Set the guest's terminal size. Absent before engine 0.3. */
   resize?(vmId: string, cols: number, rows: number): Promise<void>;
+  /** Show `files` read-only in the guest folder `path` (absolute, created if
+   *  missing). Not kept in snapshots. Absent before engine 0.4. */
+  mount?(vmId: string, files: MountFiles, path: string): Promise<void>;
+  /** Undo the `mount` at `path`. Absent before engine 0.4. */
+  unmount?(vmId: string, path: string): Promise<void>;
+  /** Copy `data` into the guest file `path`, replacing it. The file must fit in
+   *  guest memory; `mount` large files instead. Absent before engine 0.4. */
+  writeFile?(vmId: string, path: string, data: Blob, opts?: WriteFileOptions): Promise<void>;
+  /** Copy the guest file `path` out as a Blob. Absent before engine 0.4. */
+  readFile?(vmId: string, path: string, opts?: ReadFileOptions): Promise<Blob>;
   /** Observe the guest's run ending (a halt, a fault). Returns the unsubscribe. */
   onExit(vmId: string, cb: (exit: VmExit) => void): () => void;
   /** Stop the VM and free its workers. Idempotent. */
@@ -275,5 +309,9 @@ export const RPC_OPS = [
   'unsubscribeOutput',
   'write',
   'resize',
+  'mount',
+  'unmount',
+  'writeFile',
+  'readFile',
 ] as const;
 export const RPC_EVENTS = ['progress', 'output', 'exit', 'lost'] as const;
