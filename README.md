@@ -112,6 +112,34 @@ A VM can be created either from a based image or your own local snapshot.
 
 Additionally you can specify `onProgress` callback to track VM loading phases (`resolve → manifest → start → memory (repeats, with counts) → run → done`) and number of virtuals CPUs the VM will have (more is not always better).
 
+### Listener: `vm.onOutput(cb)` → unsubscribe
+
+The raw bytes the guest prints on its console, including escape sequences.
+
+```js
+const decoder = new TextDecoder(); // The output comes as bytes (Uint8Array), TextDecoder turns them into text.
+const stopOutput = vm.onOutput((bytes, info) => {
+  if (info.exec) return; // skip commands that we call ourselfs
+  console.log(decoder.decode(bytes, { stream: true }));
+});
+
+// to stop listening:
+stopOutput();
+```
+
+### `vm.onExit(cb)` → unsubscribe
+
+The VM stopped (halted or faulted). Every later call on the VM rejects with `vm-exited`.
+
+If the VM has already stopped, callback is called right away. It is not called for `vm.dispose()`.
+
+```js
+const stopExit = vm.onExit(({ reason }) => console.log(`VM stopped: ${reason}`));
+
+// later, to stop listening:
+stopExit();
+```
+
 ### `vm.exec(command, { timeoutMs? })` → `{ output, exitCode, truncated }`
 
 Runs `command` in the guest's shell (`sh`), and returns what it printed and its exit status. `command` can be one command or several, one per line. The default timeout is two minutes.
@@ -123,11 +151,7 @@ It works by typing the command into the guest's serial console and reading the b
 - **`output` is capped at 1 MiB**, and past that the head is dropped and `truncated` is `true`. Write to a file and read it back if you need more.
 - A timeout does its best to terminate the command (sends Ctrl-C to the VM's console), but that does not guarantee that the command will stop -- a program that ignores Ctrl-C (like vim) will keep running.
 
-Whatever the command does runs as **root** in the guest. That guest is a VM in the visitor's own browser with no path back to your servers, but it is a real root shell: treat the command the way you would treat any code you hand a machine.
-
-### `vm.onOutput(cb)` → unsubscribe
-
-The raw bytes the guest prints on its console including escape sequences included.
+Whatever the command does runs as **root** in the guest.
 
 ### `vm.write(data)`
 
@@ -135,21 +159,26 @@ Send data directly into VM console, lower level than `vm.exec`, allows sending a
 
 ### `vm.resize(cols, rows)`
 
-Set terminal console size. Mainly useful if you are writing your own terminal implementation. If you want to use a terminal with your VM it's easier to connect xterm (see "Terminal" section below).
+Set terminal console size. Mainly useful if you are writing your own terminal implementation.
 
-### `vm.onExit(cb)` → unsubscribe
-
-The guest's run ended (it halted, or faulted). Every later call on the VM rejects with `vm-exited`.
+If you want to use a terminal with your VM it's easier to connect xterm (see "Terminal" section below).
 
 ### `vm.writeFile(path, data, { mode?, timeoutMs? })`
 
-Copies `data` (a `Blob` or `File`, bytes, or a string) into the guest as the file `path`, an absolute guest path. An existing file is replaced, and a missing folder is created. `mode` sets the permission bits, e.g. `0o755` for a script.
+Copies `data` (a `Blob` or `File`, bytes, or a string) into the VM as the file `path` (an absolute path). An existing file is replaced, a missing folder is created.
 
-The copy is kept in guest memory, like everything the guest writes, so it has to fit there (`alpine` has 1 GiB). Mount a large file instead. The default timeout is two minutes plus one second per MiB.
+- `mode` sets the permission bits, e.g. `0o755` for a script.
+- `timeoutMs` will terminate operation if it doesn't complete within specified time (for example VM is very busy). Default is two minutes plus one second per MiB.
+
+The copy is kept in VM memory, so it has to fit there (`alpine` for example has 1 GiB). If you need to use larger file, use `vm.mount` instead.
+
+**Files become part of the VM, so when snapshot is taken those files will be present in the snapshot.**
 
 ### `vm.readFile(path, { maxBytes?, timeoutMs? })` → `Blob`
 
-Copies the guest's file `path` out. The copy is kept in page memory. A file larger than `maxBytes` (default 1 GiB, the guest's memory) is refused with `read-failed`, so a program in the guest can't fill your page's memory. The default timeout is ten minutes. To let the visitor save the file:
+Copies a file out of VM. The copy is kept in VM memory, so the file should fit there (default 1 GiB). If it doesn't or path is not a file but directory or doesn't exist: the read is refused with `read-failed`.
+
+Here's example of how file can be downloaded from the VM:
 
 ```js
 const blob = await vm.readFile('/root/report.pdf');
@@ -161,25 +190,19 @@ a.click();
 
 ### `vm.mount(files, path)` → `{ path, unmount() }`
 
-Makes files from your page visible in the guest, read-only, in the folder `path`, which is created if missing. `files` is a record of names to Blobs (`{ 'data.bin': blob }`), or a list of Files (`input.files`, a drop's `dataTransfer.files`).
+Mounts files in read-only mode into the VM. Files are not copied so do not consume memory. `path` is created if missing. `files` is a record of names to Blobs (`{ 'data.bin': blob }`), or a list of Files (`input.files` or `dataTransfer.files`).
 
-Nothing is copied up front: the guest reads each file as it needs it. So file size does not matter, and a file larger than the guest's memory works too. To change a file, copy it first (`cp /data/data.bin /root/`). A path that is already mounted is refused with `invalid-input`; `unmount` it first.
+A path that is already mounted is refused with `invalid-input`, `unmount` it first.
 
-Keep in mind:
-
-- **Mounts are not saved in snapshots.** After you boot a snapshot, mount again. Mounts left over in the snapshot are removed first.
-- **Some paths can't be mounted over.** A path that would cover `/`, `/bin`, `/dev`, `/etc`, `/lib`, `/proc`, `/run`, `/sbin`, `/sys`, `/tmp` or `/usr` is refused with `invalid-input`, because the VM could then no longer run commands. So is anything under `/run/arm64js/share`, where the SDK keeps its own files. A folder inside the others, like `/usr/local/data` or `/tmp/in`, is fine.
-- **If file sharing stops, its mounts are gone.** Calls that were waiting reject (`mount-failed`, `write-failed` or `read-failed`), the next `mount`, `writeFile` or `readFile` starts sharing again, and you need to mount again.
-- **The VM waits on file operations.** While the guest waits for a file operation, the whole VM waits too.
-- **Requirements.** `mount`, `writeFile` and `readFile` need engine 0.4 or newer and a VM from an image built with file sharing (images on the CDN include it from engine 0.4 on). Otherwise they reject with `share-unavailable`.
+**Mounts are not part of the VM and are not saved in snapshots.** After you boot a snapshot, mount again.
 
 ### `vm.unmount(path)`
 
-Undoes a `mount`. If nothing is mounted at `path` (including when a program in the guest already unmounted it), it does nothing. While a program in the guest still uses the files, it rejects with `mount-failed`.
+Undoes a `mount`. If nothing is mounted at `path` it does nothing. While a program in the VM still uses the files, it rejects with `unmount-failed`.
 
 ### `vm.snapshot({ name?, meta? })` → `SnapshotInfo`
 
-Saves the VM into this origin's browser storage (OPFS) and keeps it running. `meta` is any JSON up to 16 KiB, returned as stored by `snapshots.list()`. Only what changed since the image is written; the image's own data stays on the CDN and is fetched again when needed.
+Saves the VM in browser storage (OPFS) and keeps it running. Use `meta` to store any extra info you'd like to add to the snapshot, any JSON up to 16 KiB, it is returned in `snapshots.list()`.
 
 ### `vm.dispose()`
 
@@ -187,17 +210,23 @@ Stops the VM and frees its workers.
 
 ### `Arm64JS.snapshots.list()` / `.get(id)` / `.remove(id, { force? })`
 
-Snapshots kept by this browser, newest first: `{ id, name, created, base, engine, vcpus, sizeBytes, meta }`. `remove` is refused while a VM runs from that snapshot, unless `force`.
+Lists stored snapshots, newest first: `{ id, name, created, base, engine, vcpus, sizeBytes, meta }`. `remove` is refused while a VM runs from that snapshot, unless `force` is specified.
 
 ### `Arm64JS.storage.status()`
 
-`{ available, reason?, persistent?, quota?, usage?, snapshots, poolBytes }`. Storage is unavailable in a page that is not a secure context, in a browser without OPFS, and in **frame mode when the browser blocks third-party storage** (a setting, and private windows). Then `snapshot()` rejects with `storage-unavailable` and everything else still works.
+Returns an object describing current storage situation: `{ available, reason?, persistent?, quota?, usage?, snapshots, poolBytes }`.
 
-Snapshots live where the VM runs: on your origin in inline mode, on the CDN's origin (partitioned to your site) in frame mode. They do not cross between the two. Safari clears script storage after seven days without a visit.
+Storage can be unavailable when:
+
+1. a page is not a secure context
+2. a browser without OPFS
+3. in **frame mode when the browser blocks third-party storage** (for example in private window).
+
+When storage is not avaialble the `snapshot()` rejects with `storage-unavailable`.
 
 ### `Arm64JS.engine()` → `'0.4'`
 
-The engine this page runs: the one this package was released with. A VM booted from a snapshot can run on another; `vm.engine` says which.
+The engine version SDK has been built with. A VM booted from a snapshot can run on another version (based on version that was running when snapshot has been made). Use `vm.engine` to check which.
 
 ### `Arm64JS.shutdown()`
 
@@ -205,11 +234,11 @@ Disposes every VM and, in frame mode, the frames.
 
 ### Errors
 
-Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `contract-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `write-failed`, `read-failed`.
+Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `contract-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `unmount-failed`, `write-failed`, `read-failed`.
 
 ## Terminal (optional)
 
-A terminal on [xterm.js](https://xtermjs.org), in its own entry point, so a page that does not import it carries no xterm code:
+A terminal is based on [xterm.js](https://xtermjs.org) and is not included by default, you need to install and wire it separately.
 
 ```sh
 npm install @xterm/xterm @xterm/addon-fit
@@ -223,34 +252,19 @@ const term = attachTerminal(vm, document.getElementById('term'));
 // term.xterm is the xterm instance; term.dispose() removes it and leaves the VM running.
 ```
 
-It shows the guest's console, sends what is typed to the guest, and sizes itself to the element (pass `{ fit: false }` to keep a fixed size, and `{ xterm: { … } }` for xterm's own options). `exec` runs on the same console but stays out of the terminal: what it prints is marked (`info.exec` in `vm.onOutput`) and skipped, and keys pressed meanwhile are sent once it finishes.
+It shows the VM console, sends what is typed to the VM, and sizes itself to the element (pass `{ fit: false }` to keep a fixed size, and `{ xterm: { … } }` for xterm's own options). `vm.exec` runs on the same console but stays out of the terminal, keys pressed while `vm.exec` command is running are sent once it finishes.
 
 ## Networking
 
-The guest has a network card, DNS, and can install Alpine packages with `apk` through the CDN's package mirror. It has no general internet access.
-
-## Versions
-
-Package `X.Y.Z` runs engine `X.Y` from the CDN. A new engine is a new `X.Y` and a new package version. Engine versions on the CDN are never changed or removed.
-
-Snapshots keep booting after you update the package:
-
-- Most engine releases don't change the snapshot format, so a snapshot saved on an older engine boots on the new one.
-- When a release does change it, the SDK boots the snapshot on the engine it was saved on (`SnapshotInfo.engine`), loaded from the CDN next to this page's engine. That VM can only do what its engine supports: for example, `writeFile` on engine 0.3 rejects with `share-unavailable`.
-- A snapshot saved on a newer engine than this page's (after going back to an older package, or from another page of your site) boots on that newer engine. If that engine needs a newer package, `boot` rejects with `contract-mismatch`.
-
-Each extra engine is one more download and, in frame mode, one more hidden frame.
+The VM has a emulated network card, DNS, and can install Alpine packages with `apk` through the CDN's package mirror. It has no general internet access.
 
 ## Development
 
 ```sh
 npm install
-npm test                          # unit tests over fakes
-ARM64JS_MAIN_REPO=../arm64js npm test   # also checks src/contract.ts and src/rpc-client.ts against the main repo
-npm run build                     # dist/
+npm test
+npm run build
 ```
-
-`src/contract.ts` and `src/rpc-client.ts` are copied verbatim from `web/src/sdk-runtime/` in [kooler/arm64js](https://github.com/kooler/arm64js), which builds the engine, the runtime and the images. Do not edit them here.
 
 ## License
 
