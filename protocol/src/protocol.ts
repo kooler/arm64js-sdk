@@ -1,20 +1,20 @@
-// The contract between the arm64js SDK (npm `arm64js`, repo kooler/arm64js-sdk)
-// and this runtime, which the SDK loads from the CDN as `sdk-v<X.Y>/`.
+// The protocol between the arm64js SDK (npm `arm64js`) and the engine runtime
+// it loads from the CDN as `sdk-v<X.Y>/`: the `Host` API, the frame handshake,
+// the RPC messages and the error codes. Published as `@arm64js/protocol`, which
+// both the SDK and the engine install. It imports nothing and names no runtime
+// internals: every type must cross a `postMessage` boundary, and every value is
+// a literal or the one error class both sides construct.
 //
-// This file and `rpc-client.ts` are the only text the two repositories share:
-// the SDK vendors both verbatim, and the release workflow publishes them beside
-// the runtime so the SDK's CI can diff its copies against the version it pins.
-// So this one imports nothing and names no runtime internals — every type must
-// cross a `postMessage` boundary, and every value is a literal or the one error
-// class both sides construct.
-//
-// Bump `CONTRACT_VERSION` on any change a released SDK could not survive
-// (a removed op, a renamed field, a changed meaning). Adding an optional field
-// or a new op is not a bump: an older SDK simply never uses it.
+// Bump `PROTOCOL_VERSION`, and with it this package's major version, on any
+// change a released SDK could not survive (a removed op, a renamed field, a
+// changed meaning). Adding an optional field or a new op is a minor version:
+// an older SDK simply never uses it. A bump also stops the SDK from loading an
+// older engine for a snapshot saved there, so the SDK must then keep speaking
+// the old protocol too.
 
-/// The contract this runtime speaks. The frame handshake and the runtime module
-/// both report it; the SDK refuses a mismatch with `contract-mismatch`.
-export const CONTRACT_VERSION = 1;
+/// The protocol version. The frame handshake and the runtime module both report
+/// it; the SDK refuses a mismatch with `protocol-mismatch`.
+export const PROTOCOL_VERSION = 1;
 
 /// Where the SDK, the runtime and the images live. Fixed: a configurable base
 /// would only let a page point the runtime at chunks built for another engine.
@@ -31,7 +31,7 @@ export const RPC_KIND = 'arm64js';
 /// the SDK rethrows them, so a page sees one vocabulary in both modes.
 export type Arm64JSErrorCode =
   | 'unsupported-browser'
-  | 'contract-mismatch'
+  | 'protocol-mismatch'
   | 'engine-mismatch'
   | 'image-not-found'
   | 'boot-failed'
@@ -48,6 +48,7 @@ export type Arm64JSErrorCode =
   | 'invalid-input'
   | 'share-unavailable'
   | 'mount-failed'
+  | 'unmount-failed'
   | 'write-failed'
   | 'read-failed';
 
@@ -118,13 +119,13 @@ export interface ExecOptions {
 
 export interface ExecResult {
   /**
-   * What the script printed: stdout and stderr merged (one serial console),
+   * What the command printed: stdout and stderr merged (one serial console),
    * escapes stripped, the command's own echo removed. Bounded; see `truncated`.
    */
   output: string;
-  /** The script's exit status, from the guest's own report. */
+  /** The command's exit status, from the guest's own report. */
   exitCode: number;
-  /** Whether `output` is only the tail of what the script printed (it is capped
+  /** Whether `output` is only the tail of what the command printed (it is capped
    *  at 1 MiB, and the head is what goes). */
   truncated: boolean;
 }
@@ -154,10 +155,9 @@ export interface SnapshotInfo {
   created: number;
   /** The CDN image the chain started from (`'alpine'`, `'alpine:2'`, …). */
   base: string;
-  /** The engine tag it was saved on. One engine runs per page (the SDK's pin),
-   *  so this is what a `boot` of it needs. An engine whose snapshot format
-   *  differs refuses it with `engine-mismatch`; most releases do not change
-   *  that format. */
+  /** The engine tag it was saved on. The SDK boots it on this engine when the
+   *  page's own cannot: that one is older, or refuses it with `engine-mismatch`
+   *  (a changed snapshot format). */
   engine: string;
   vcpus: number;
   /** Bytes this save wrote, not the whole chain. */
@@ -204,10 +204,11 @@ export interface Host {
   /** Boot a CDN image (`'alpine'`, `'alpine:2'`, `'alpine@sha256:<hex>'`) or a
    *  local snapshot by id (64 hex characters). Resolves once the guest is stepping. */
   boot(target: string, opts?: BootOptions): Promise<{ vmId: string }>;
-  /** Run a shell script in the guest and report its exit status. One at a time per VM. */
-  exec(vmId: string, script: string, opts?: ExecOptions): Promise<ExecResult>;
+  /** Run a shell command (one or more lines) in the guest and report its exit
+   *  status. One at a time per VM. */
+  exec(vmId: string, command: string, opts?: ExecOptions): Promise<ExecResult>;
   /** Observe the raw console bytes the guest prints. `info.exec` marks bytes
-   *  printed by an `exec` (its script, its output, the prompts around it), which
+   *  printed by an `exec` (its command, its output, the prompts around it), which
    *  a terminal hides. Returns the unsubscribe. */
   onOutput(vmId: string, cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void;
   /** Type into the guest's console, as a person at a terminal would. Held
@@ -240,10 +241,10 @@ export interface Host {
 }
 
 /// The shape of the runtime module (`sdk-v<X.Y>/arm64js-sdk-lib.js`) the SDK
-/// imports. `engine` is the CDN version tag (`'0.11'`), `contract` is
-/// `CONTRACT_VERSION` as built.
+/// imports. `engine` is the CDN version tag (`'0.11'`), `protocol` is
+/// `PROTOCOL_VERSION` as built.
 export interface RuntimeModule {
-  contract: number;
+  protocol: number;
   engine: string;
   createHost(): Host;
 }
@@ -254,7 +255,7 @@ export interface FrameHandshake {
   v: 1;
   /** Whether the frame document is cross-origin isolated (the runtime can run). */
   isolated: boolean;
-  contract: number;
+  protocol: number;
   engine: string;
 }
 

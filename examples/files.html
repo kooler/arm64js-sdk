@@ -13,9 +13,9 @@
   const out = document.getElementById('out');
   const log = (s) => (out.textContent += '\n' + s);
   const report = (e) => log(`${e.code ?? 'error'}: ${e.message}`);
-  const run = async (vm, script) => {
-    const r = await vm.exec(script);
-    log(`$ ${script}\n${r.output}`);
+  const run = async (vm, command) => {
+    const r = await vm.exec(command);
+    log(`$ ${command}\n${r.output}`);
   };
   try {
     const vm = await Arm64JS.boot('alpine');

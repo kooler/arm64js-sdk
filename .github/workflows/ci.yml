@@ -15,9 +15,5 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
-      # The vendored contract is compared to the copy published with the engine
-      # this package pins. Before the first engine publish this skips.
       - run: npm test
-        env:
-          ARM64JS_SDK_ONLINE: '1'
       - run: npm run build

@@ -1,6 +1,7 @@
-# Publish to npm on a version tag (v0.11.0). The version must equal the tag,
-# and its major.minor is the engine this package pins on the CDN — so the
-# engine must already be published there (the tests check).
+# Publish `arm64js` to npm on a version tag (v0.11.0). The version must equal
+# the tag, and its major.minor is the engine this package runs from the CDN, so
+# that engine must already be published there. The `@arm64js/protocol` version
+# in this repo must already be on npm (publish-protocol.yml).
 name: Publish
 on:
   push:
@@ -23,9 +24,12 @@ jobs:
           set -euo pipefail
           v=$(node -p 'require("./package.json").version')
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "package.json is $v but the tag is $GITHUB_REF_NAME" >&2; exit 1; }
+      - name: the protocol this package was tested with is on npm
+        run: |
+          set -euo pipefail
+          p=$(node -p 'require("./protocol/package.json").version')
+          [ "$(npm view "@arm64js/protocol@$p" version 2>/dev/null)" = "$p" ] || { echo "@arm64js/protocol@$p is not on npm; publish it first (tag protocol-v$p)" >&2; exit 1; }
       - run: npm test
-        env:
-          ARM64JS_SDK_ONLINE: '1'
       - run: npm run build
       - run: npm publish --access public
         env:

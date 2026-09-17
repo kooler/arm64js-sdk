@@ -1,11 +1,11 @@
 // The frame mount over fakes: the handshake is accepted only from the frame's
 // own window and origin, an unisolated frame is reported as unsupported, a
-// contract mismatch by name, silence by the timeout, and a good handshake ends
+// protocol mismatch by name, silence by the timeout, and a good handshake ends
 // with one connect message carrying a port.
 
 import { MessageChannel } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
-import { CONTRACT_VERSION, FRAME_MESSAGE_KIND } from '../src/contract.ts';
+import { FRAME_MESSAGE_KIND, PROTOCOL_VERSION } from '@arm64js/protocol';
 import { mountFrameHost, type FrameDeps } from '../src/frame-host.ts';
 
 function fakePage() {
@@ -62,7 +62,7 @@ const hello = (over: Record<string, unknown> = {}) => ({
   kind: FRAME_MESSAGE_KIND,
   v: 1,
   isolated: true,
-  contract: CONTRACT_VERSION,
+  protocol: PROTOCOL_VERSION,
   engine: '0.11',
   ...over,
 });
@@ -97,11 +97,11 @@ describe('mountFrameHost', () => {
     expect(page.isRemoved()).toBe(true);
   });
 
-  it('reports a contract mismatch by name', async () => {
+  it('reports a protocol mismatch by name', async () => {
     const page = fakePage();
     const pending = mountFrameHost(URL_, page.deps);
-    page.emit(hello({ contract: CONTRACT_VERSION + 5 }));
-    await expect(pending).rejects.toMatchObject({ code: 'contract-mismatch' });
+    page.emit(hello({ protocol: PROTOCOL_VERSION + 5 }));
+    await expect(pending).rejects.toMatchObject({ code: 'protocol-mismatch' });
   });
 
   it('gives up on a silent frame', async () => {

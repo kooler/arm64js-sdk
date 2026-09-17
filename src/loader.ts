@@ -1,55 +1,30 @@
 // Which runtime to load, and from where. `sdk-v<X.Y>/` on the CDN holds an
-// exact, never-rewritten runtime; `versions.json` says which `X.Y` is newest
-// overall and per major.
+// exact, never-rewritten runtime.
 //
-// The default pin is this package's own `X.Y`, the runtime it was released
-// with. `'v0'` follows the newest 0.x and `'latest'` the newest of all, both
-// resolved through `versions.json` at load time.
+// A page runs the runtime this package was released with, its own `X.Y`. A
+// snapshot saved on another engine can bring that engine's runtime in too.
 
-import { Arm64JSError, CDN_BASE } from './contract.js';
+import { CDN_BASE } from '@arm64js/protocol';
 import { VERSION } from './version.js';
 
-/// `'latest'`, `'v<major>'`, or `'v<major>.<minor>'` (exact).
-export type EngineSpec = string;
-
-/// The engine this package pins by default: its own major.minor.
-export function defaultEngine(): string {
+/// The engine this package runs: its own major.minor.
+export function packageEngine(): string {
   const [major, minor] = VERSION.split('.');
-  return `v${major}.${minor}`;
+  return `${major}.${minor}`;
 }
 
-export interface VersionsIndex {
-  latest: string;
-  majors: Record<string, string>;
+/// `'0.11'` as `[0, 11]`, or `null` for anything that is not an exact engine tag.
+export function engineParts(tag: string): [number, number] | null {
+  const m = /^(\d+)\.(\d+)$/.exec(tag);
+  return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
-/// Turn a spec into an exact `X.Y`, asking the CDN only for the moving ones.
-export async function resolveEngine(
-  spec: EngineSpec,
-  fetchFn: (url: string) => Promise<Response> = (u) => globalThis.fetch(u, { cache: 'no-cache' }),
-): Promise<string> {
-  const exact = /^v(\d+)\.(\d+)$/.exec(spec);
-  if (exact) return `${exact[1]}.${exact[2]}`;
-  const major = /^v(\d+)$/.exec(spec);
-  if (spec !== 'latest' && !major) {
-    throw new Arm64JSError(
-      'invalid-input',
-      `engine must be 'latest', 'v<major>' or 'v<major>.<minor>', not ${JSON.stringify(spec)}`,
-    );
-  }
-  let index: VersionsIndex;
-  try {
-    const res = await fetchFn(`${CDN_BASE}/versions.json`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    index = (await res.json()) as VersionsIndex;
-  } catch (e) {
-    throw new Arm64JSError('boot-failed', `could not read the engine index from the CDN: ${String(e)}`);
-  }
-  const picked = major ? index.majors?.[major[1]] : index.latest;
-  if (!picked || !/^\d+\.\d+$/.test(picked)) {
-    throw new Arm64JSError('boot-failed', `no engine on the CDN matches ${spec}`);
-  }
-  return picked;
+/// Whether engine `a` is newer than engine `b`. False unless both are exact tags.
+export function isNewerEngine(a: string, b: string): boolean {
+  const x = engineParts(a);
+  const y = engineParts(b);
+  if (!x || !y) return false;
+  return x[0] !== y[0] ? x[0] > y[0] : x[1] > y[1];
 }
 
 /// The immutable runtime directory for an exact `X.Y`, with its trailing slash.

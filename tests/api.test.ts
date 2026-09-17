@@ -1,9 +1,11 @@
-// The public API over a fake host: inline vs frame selection, the contract
-// check, VM handles, and the snapshot and storage calls.
+// The public API over a fake host: inline vs frame selection, the protocol
+// check, VM handles, the snapshot and storage calls, and booting a snapshot on
+// the engine it was saved on.
 
 import { describe, expect, it, vi } from 'vitest';
-import { CONTRACT_VERSION, type Host } from '../src/contract.ts';
+import { Arm64JSError, PROTOCOL_VERSION, type Host, type SnapshotInfo } from '@arm64js/protocol';
 import { createArm64JS } from '../src/index.ts';
+import { packageEngine } from '../src/loader.ts';
 
 function fakeHost(): Host & { calls: unknown[][] } {
   const calls: unknown[][] = [];
@@ -50,7 +52,11 @@ function fakeHost(): Host & { calls: unknown[][] } {
   };
 }
 
-const exactFetch = async () => new Response(JSON.stringify({ latest: '0.11', majors: { '0': '0.11' } }));
+function savedOn(id: string, engine: string): SnapshotInfo {
+  return { id, name: null, created: 1, base: 'alpine', engine, vcpus: 1, sizeBytes: 1, meta: null };
+}
+
+const engineOf = (url: string) => /sdk-v([\d.]+)\//.exec(url)![1];
 
 describe('Arm64JS', () => {
   it('runs inline on an isolated page, importing the pinned runtime from the CDN', async () => {
@@ -58,17 +64,18 @@ describe('Arm64JS', () => {
     const urls: string[] = [];
     const sdk = createArm64JS({
       isolated: true,
+      engine: '0.11',
       importRuntime: async (url) => (
         urls.push(url),
-        { contract: CONTRACT_VERSION, engine: '0.11', createHost: () => host }
+        { protocol: PROTOCOL_VERSION, engine: '0.11', createHost: () => host }
       ),
     });
-    sdk.configure({ engine: 'v0.11' });
     const vm = await sdk.boot('alpine', { vcpus: 1 });
     expect(urls).toEqual(['https://cdn.arm64js.com/sdk-v0.11/arm64js-sdk-lib.js']);
     expect(await sdk.mode()).toBe('inline');
     expect(await sdk.engine()).toBe('0.11');
     expect(vm.id).toBe('vm1');
+    expect(vm.engine).toBe('0.11');
     expect(await vm.exec('true')).toEqual({ output: 'ok', exitCode: 0, truncated: false });
     const snap = await vm.snapshot({ name: 's' });
     expect(snap.name).toBe('s');
@@ -76,9 +83,10 @@ describe('Arm64JS', () => {
     await vm.dispose();
     expect(() => vm.exec('true')).toThrow(/disposed/);
     expect(host.calls.filter((c) => c[0] === 'dispose')).toHaveLength(1);
-    // Booting a snapshot by its info hands the host its id.
-    await sdk.boot(snap);
+    await sdk.boot(snap.id);
     expect(host.calls.at(-1)).toEqual(['boot', snap.id, undefined]);
+    // Only an id, not the snapshot's info.
+    await expect(sdk.boot(snap as never)).rejects.toMatchObject({ code: 'invalid-input' });
   });
 
   it('passes console input and size through, and says so on an engine without them', async () => {
@@ -91,7 +99,7 @@ describe('Arm64JS', () => {
     };
     const sdk = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.11', createHost: () => withInput }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.11', createHost: () => withInput }),
     });
     const vm = await sdk.boot('alpine');
     await vm.write('ls\r');
@@ -103,20 +111,19 @@ describe('Arm64JS', () => {
 
     const older = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.2', createHost: () => fakeHost() }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.2', createHost: () => fakeHost() }),
     });
     const vm2 = await older.boot('alpine');
     await expect(vm2.write('x')).rejects.toMatchObject({ code: 'invalid-input', message: /0\.3/ });
     await expect(vm2.resize(80, 24)).rejects.toMatchObject({ code: 'invalid-input' });
   });
 
-  it('refuses a runtime speaking another contract', async () => {
+  it('refuses a runtime speaking another protocol', async () => {
     const sdk = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION + 1, engine: '0.11', createHost: fakeHost }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION + 1, engine: '0.11', createHost: fakeHost }),
     });
-    sdk.configure({ engine: 'v0.11' });
-    await expect(sdk.boot('alpine')).rejects.toMatchObject({ code: 'contract-mismatch' });
+    await expect(sdk.boot('alpine')).rejects.toMatchObject({ code: 'protocol-mismatch' });
   });
 
   it('mounts the frame on a page that is not isolated, and forgets it when lost', async () => {
@@ -126,10 +133,9 @@ describe('Arm64JS', () => {
     const mounts: string[] = [];
     const sdk = createArm64JS({
       isolated: false,
-      fetchFn: exactFetch,
+      engine: '0.11',
       mountFrame: async (url) => (mounts.push(url), { host, onLost: (cb) => ((lost = cb), () => {}), dispose }),
     });
-    sdk.configure({ engine: 'latest' });
     await sdk.boot('alpine');
     expect(mounts).toEqual(['https://cdn.arm64js.com/sdk-v0.11/frame.html']);
     expect(await sdk.mode()).toBe('frame');
@@ -143,19 +149,140 @@ describe('Arm64JS', () => {
     expect(dispose).toHaveBeenCalledTimes(2);
   });
 
-  it('exposes snapshots and storage, and locks configure after the first boot', async () => {
+  it('exposes snapshots and storage', async () => {
     const host = fakeHost();
     const sdk = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.11', createHost: () => host }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.11', createHost: () => host }),
     });
-    sdk.configure({ engine: 'v0.11' });
     expect(await sdk.snapshots.list()).toEqual([]);
     expect(await sdk.snapshots.get('x')).toBeNull();
     await sdk.snapshots.remove('a'.repeat(64), { force: true });
     expect(host.calls.at(-1)).toEqual(['removeSnapshot', 'a'.repeat(64), { force: true }]);
     expect((await sdk.storage.status()).available).toBe(true);
-    expect(() => sdk.configure({ engine: 'latest' })).toThrow(/before the first boot/);
+  });
+
+  it("boots a snapshot on the engine it was saved on when this page's cannot", async () => {
+    const id = (c: string) => c.repeat(64);
+    const saved: Record<string, string> = { [id('a')]: '0.4', [id('b')]: '0.4', [id('c')]: '0.6', [id('d')]: 'dev' };
+    // What this page's engine refuses: a changed snapshot format.
+    const refused = new Set([id('a'), id('d')]);
+    const hosts = new Map<string, ReturnType<typeof fakeHost>>();
+    const urls: string[] = [];
+    const sdk = createArm64JS({
+      isolated: true,
+      engine: '0.5',
+      importRuntime: async (url) => {
+        urls.push(url);
+        const engine = engineOf(url);
+        const host = fakeHost();
+        const boot = host.boot;
+        host.boot = async (target, opts) => {
+          if (engine === '0.5' && refused.has(target)) throw new Arm64JSError('engine-mismatch', 'another format');
+          await boot(target, opts);
+          return { vmId: `${engine}:${target[0]}` };
+        };
+        host.getSnapshot = async (sid) => (saved[sid] ? savedOn(sid, saved[sid]) : null);
+        hosts.set(engine, host);
+        return { protocol: PROTOCOL_VERSION, engine, createHost: () => host };
+      },
+    });
+    const booted = (engine: string, target: string) =>
+      hosts.get(engine)!.calls.some((c) => c[0] === 'boot' && c[1] === target);
+
+    // The same format stays on this page's engine.
+    expect((await sdk.boot(id('b'))).engine).toBe('0.5');
+    // Another format goes to the engine it was saved on.
+    const a = await sdk.boot(id('a'));
+    expect([a.engine, a.id]).toEqual(['0.4', '0.4:a']);
+    // A newer engine's snapshot goes straight to it.
+    expect((await sdk.boot(id('c'))).engine).toBe('0.6');
+    expect(booted('0.5', id('c'))).toBe(false);
+    // With no engine to go to, the refusal stands.
+    await expect(sdk.boot(id('d'))).rejects.toMatchObject({ code: 'engine-mismatch' });
+    // A snapshot this page does not know is left to its own engine to report.
+    await sdk.boot(id('e'));
+    expect(booted('0.5', id('e'))).toBe(true);
+    // Each engine loads once, and this page's stays the one reported.
+    await sdk.boot(id('a'));
+    expect(urls.map(engineOf)).toEqual(['0.5', '0.4', '0.6']);
+    expect(await sdk.engine()).toBe('0.5');
+
+    // A VM's calls go to its own engine; snapshot calls to this page's.
+    await a.exec('true');
+    expect(hosts.get('0.4')!.calls.at(-1)).toEqual(['exec', '0.4:a', 'true']);
+    await sdk.snapshots.remove(id('a'));
+    expect(hosts.get('0.5')!.calls.at(-1)).toEqual(['removeSnapshot', id('a'), undefined]);
+
+    await sdk.shutdown();
+    const disposed = (engine: string) => hosts.get(engine)!.calls.filter((c) => c[0] === 'dispose').length;
+    expect([disposed('0.4'), disposed('0.5'), disposed('0.6')]).toEqual([2, 2, 1]);
+  });
+
+  it('refuses an engine for a snapshot that speaks another protocol', async () => {
+    const id = 'a'.repeat(64);
+    const sdk = createArm64JS({
+      isolated: true,
+      engine: '0.5',
+      importRuntime: async (url) => {
+        const host = fakeHost();
+        host.getSnapshot = async () => savedOn(id, '0.9');
+        const protocol = engineOf(url) === '0.9' ? PROTOCOL_VERSION + 1 : PROTOCOL_VERSION;
+        return { protocol, engine: engineOf(url), createHost: () => host };
+      },
+    });
+    await expect(sdk.boot(id)).rejects.toMatchObject({ code: 'protocol-mismatch', message: /engine 0\.9/ });
+    // This page's engine is still up.
+    expect((await sdk.boot('alpine')).engine).toBe('0.5');
+  });
+
+  it("keeps each engine's frame apart", async () => {
+    const id = 'a'.repeat(64);
+    const frames = new Map<string, { lost: () => void; dispose: ReturnType<typeof vi.fn> }>();
+    const mounts: string[] = [];
+    const sdk = createArm64JS({
+      isolated: false,
+      engine: '0.5',
+      mountFrame: async (url) => {
+        mounts.push(url);
+        const engine = engineOf(url);
+        const host = fakeHost();
+        host.getSnapshot = async () => savedOn(id, '0.4');
+        if (engine === '0.5') {
+          host.boot = async () => {
+            throw new Arm64JSError('engine-mismatch', 'another format');
+          };
+        }
+        const frame = { lost: () => {}, dispose: vi.fn() };
+        frames.set(engine, frame);
+        return { host, onLost: (cb) => ((frame.lost = cb), () => {}), dispose: frame.dispose };
+      },
+    });
+    expect((await sdk.boot(id)).engine).toBe('0.4');
+    const first = frames.get('0.4')!;
+    first.lost();
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(frames.get('0.5')!.dispose).not.toHaveBeenCalled();
+    // The next boot builds that engine's frame again, and only that one.
+    await sdk.boot(id);
+    expect(mounts.map(engineOf)).toEqual(['0.5', '0.4', '0.4']);
+    await sdk.shutdown();
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(frames.get('0.4')!.dispose).toHaveBeenCalledTimes(1);
+    expect(frames.get('0.5')!.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs this package's own engine by default", async () => {
+    const urls: string[] = [];
+    const sdk = createArm64JS({
+      isolated: true,
+      importRuntime: async (url) => (
+        urls.push(url),
+        { protocol: PROTOCOL_VERSION, engine: engineOf(url), createHost: fakeHost }
+      ),
+    });
+    expect(await sdk.engine()).toBe(packageEngine());
+    expect(urls).toEqual([`https://cdn.arm64js.com/sdk-v${packageEngine()}/arm64js-sdk-lib.js`]);
   });
 
   it('shares files: Files by name, Blob records as they are, and writes as Blobs', async () => {
@@ -178,7 +305,7 @@ describe('Arm64JS', () => {
     };
     const sdk = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.4', createHost: () => sharing }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.4', createHost: () => sharing }),
     });
     const vm = await sdk.boot('alpine');
 
@@ -254,7 +381,7 @@ describe('Arm64JS', () => {
     // An engine before file sharing says which one is needed.
     const older = createArm64JS({
       isolated: true,
-      importRuntime: async () => ({ contract: CONTRACT_VERSION, engine: '0.3', createHost: () => fakeHost() }),
+      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.3', createHost: () => fakeHost() }),
     });
     const vm2 = await older.boot('alpine');
     await expect(vm2.writeFile('/x', 'x')).rejects.toMatchObject({ code: 'share-unavailable', message: /0\.4/ });

@@ -7,14 +7,14 @@
 
 import {
   Arm64JSError,
-  CONTRACT_VERSION,
+  PROTOCOL_VERSION,
   FRAME_MESSAGE_KIND,
   FRAME_OP_CONNECT,
   type FrameConnect,
   type FrameHandshake,
   type Host,
-} from './contract.js';
-import { RpcClient } from './rpc-client.js';
+} from '@arm64js/protocol';
+import { RpcClient } from '@arm64js/protocol/rpc-client';
 
 /// How long the frame gets to say hello before the page gives up on it: a frame
 /// that never runs a script (blocked third-party frames, a network failure).
@@ -92,11 +92,11 @@ export function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<Frame
       const d = e.data as Partial<FrameHandshake> | null;
       if (!d || d.kind !== FRAME_MESSAGE_KIND || d.v !== 1 || typeof d.isolated !== 'boolean') return;
       if (!d.isolated) return finish(new Arm64JSError('unsupported-browser', UNSUPPORTED_MESSAGE));
-      if (d.contract !== CONTRACT_VERSION) {
+      if (d.protocol !== PROTOCOL_VERSION) {
         return finish(
           new Arm64JSError(
-            'contract-mismatch',
-            `this SDK speaks contract ${CONTRACT_VERSION} but the engine runtime speaks ${String(d.contract)}; update the arm64js package or pin an engine it matches`,
+            'protocol-mismatch',
+            `this SDK speaks protocol ${PROTOCOL_VERSION} but engine ${String(d.engine)} speaks ${String(d.protocol)}; update the arm64js package`,
           ),
         );
       }

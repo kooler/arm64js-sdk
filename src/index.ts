@@ -12,13 +12,14 @@
 //   const again = await Arm64JS.boot(snap.id);
 //
 // A small loader. The engine and its browser runtime come from the arm64js
-// CDN, pinned to the version this package was released with. The VM runs in
-// this page when the page is cross-origin isolated, otherwise in a hidden frame
-// from the CDN that isolates itself. Same API either way.
+// CDN, pinned to the version this package was released with; a snapshot saved
+// on another engine boots on that one when it has to. The VM runs in this page
+// when the page is cross-origin isolated, otherwise in a hidden frame from the
+// CDN that isolates itself. Same API either way.
 
 import {
   Arm64JSError,
-  CONTRACT_VERSION,
+  PROTOCOL_VERSION,
   type Arm64JSErrorCode,
   type BootOptions,
   type ExecOptions,
@@ -32,9 +33,9 @@ import {
   type StorageStatus,
   type VmExit,
   type WriteFileOptions,
-} from './contract.js';
+} from '@arm64js/protocol';
 import { mountFrameHost, type FrameDeps } from './frame-host.js';
-import { defaultEngine, frameUrl, resolveEngine, runtimeModuleUrl, type EngineSpec } from './loader.js';
+import { engineParts, frameUrl, isNewerEngine, packageEngine, runtimeModuleUrl } from './loader.js';
 import { VERSION } from './version.js';
 
 export { Arm64JSError, VERSION as version };
@@ -146,24 +147,22 @@ export type {
   StorageStatus,
   VmExit,
   WriteFileOptions,
-} from './contract.js';
-export type { EngineSpec } from './loader.js';
-
-export interface Arm64JSConfig {
-  /** Which engine to load from the CDN: `'latest'`, `'v0'`, or an exact `'v0.11'`.
-   *  Default: the version this package was released with. */
-  engine?: EngineSpec;
-}
-
+} from '@arm64js/protocol';
 export type HostMode = 'inline' | 'frame';
 
 /// Seams for tests; a page never passes these.
 export interface Arm64JSDeps {
   isolated?: boolean;
+  /** The page's own engine (default: this package's). */
+  engine?: string;
   importRuntime?: (url: string) => Promise<RuntimeModule>;
   mountFrame?: (url: string) => Promise<{ host: Host; onLost(cb: () => void): () => void; dispose(): void }>;
-  fetchFn?: (url: string) => Promise<Response>;
   frameDeps?: FrameDeps;
+}
+
+/// A local snapshot id, as the runtime spells it.
+function isSnapshotId(s: string): boolean {
+  return /^[0-9a-f]{64}$/.test(s);
 }
 
 /// A running VM.
@@ -176,17 +175,20 @@ export class Vm {
   constructor(
     readonly id: string,
     private readonly host: Host,
+    /** The engine this VM runs on (`'0.11'`). */
+    readonly engine: string,
     private readonly onDisposed: (vm: Vm) => void,
   ) {}
 
-  /** Run a shell script in the guest and get its output and exit code. One at a time per VM. */
-  exec(script: string, opts?: ExecOptions): Promise<ExecResult> {
+  /** Run a shell command (one or more lines) in the guest and get its output and
+   *  exit code. One at a time per VM. */
+  exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
     this.check();
-    return owned(this.host.exec(this.id, script, opts));
+    return owned(this.host.exec(this.id, command, opts));
   }
 
   /** The raw bytes the guest prints on its console. `info.exec` marks what an
-   *  `exec` printed (its script, output and prompts). Returns the unsubscribe. */
+   *  `exec` printed (its command, output and prompts). Returns the unsubscribe. */
   onOutput(cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void {
     this.check();
     return this.host.onOutput(this.id, cb);
@@ -321,33 +323,29 @@ interface Loaded {
   dispose(): void;
 }
 
-/// The runtime for this page: one, loaded on the first `boot`.
+/// The runtimes for this page: its own engine, loaded on the first call, and
+/// any other a snapshot needs.
 class Runtime {
-  private config: Arm64JSConfig = {};
-  private loading: Promise<Loaded> | null = null;
+  private readonly own: string;
+  private readonly engines = new Map<string, Promise<Loaded>>();
   private readonly vms = new Set<Vm>();
 
-  constructor(private readonly deps: Arm64JSDeps = {}) {}
-
-  configure(config: Arm64JSConfig): void {
-    if (this.loading) {
-      throw new Arm64JSError(
-        'invalid-input',
-        'configure() must run before the first boot(); the engine is already loaded',
-      );
-    }
-    this.config = { ...this.config, ...config };
+  constructor(private readonly deps: Arm64JSDeps = {}) {
+    this.own = deps.engine ?? packageEngine();
   }
 
-  load(): Promise<Loaded> {
-    return (this.loading ??= this.doLoad().catch((e) => {
-      this.loading = null;
+  load(engine = this.own): Promise<Loaded> {
+    const loading = this.engines.get(engine);
+    if (loading) return loading;
+    const next: Promise<Loaded> = this.doLoad(engine, () => this.lost(engine, next)).catch((e) => {
+      if (this.engines.get(engine) === next) this.engines.delete(engine);
       throw e;
-    }));
+    });
+    this.engines.set(engine, next);
+    return next;
   }
 
-  private async doLoad(): Promise<Loaded> {
-    const engine = await resolveEngine(this.config.engine ?? defaultEngine(), this.deps.fetchFn);
+  private async doLoad(engine: string, onLost: () => void): Promise<Loaded> {
     const isolated = this.deps.isolated ?? Boolean(globalThis.crossOriginIsolated);
     if (isolated) {
       const importer =
@@ -358,10 +356,10 @@ class Runtime {
       } catch (e) {
         throw new Arm64JSError('boot-failed', `could not load engine ${engine} from the CDN: ${String(e)}`);
       }
-      if (mod.contract !== CONTRACT_VERSION) {
+      if (mod.protocol !== PROTOCOL_VERSION) {
         throw new Arm64JSError(
-          'contract-mismatch',
-          `this SDK speaks contract ${CONTRACT_VERSION} but engine ${engine} speaks ${String(mod.contract)}; update the arm64js package or pin an engine it matches`,
+          'protocol-mismatch',
+          `this SDK speaks protocol ${PROTOCOL_VERSION} but engine ${engine} speaks ${String(mod.protocol)}; update the arm64js package`,
         );
       }
       return { host: mod.createHost(), mode: 'inline', engine, dispose() {} };
@@ -369,11 +367,10 @@ class Runtime {
     const mounter = this.deps.mountFrame ?? ((url: string) => mountFrameHost(url, this.deps.frameDeps));
     const frame = await mounter(frameUrl(engine));
     frame.onLost(() => {
-      // The next boot builds a new frame. Tear this one down first: only its
+      // The next call builds a new frame. Tear this one down first: only its
       // main thread stopped answering, and the workers behind it keep stepping
-      // a guest with no handle left once `loading` is cleared.
-      this.loading = null;
-      this.vms.clear();
+      // a guest with no handle left.
+      onLost();
       try {
         frame.dispose();
       } catch {
@@ -383,11 +380,37 @@ class Runtime {
     return { host: frame.host, mode: 'frame', engine, dispose: () => frame.dispose() };
   }
 
-  async boot(target: string | SnapshotInfo, opts?: BootOptions): Promise<Vm> {
-    const id = typeof target === 'string' ? target : target.id;
-    const { host } = await this.load();
-    const { vmId } = await owned(host.boot(id, opts));
-    const vm = new Vm(vmId, host, (v) => this.vms.delete(v));
+  /// Forget a frame that stopped answering, and the VMs that ran in it.
+  private lost(engine: string, loading: Promise<Loaded>): void {
+    if (this.engines.get(engine) !== loading) return;
+    this.engines.delete(engine);
+    for (const vm of this.vms) if (vm.engine === engine) this.vms.delete(vm);
+  }
+
+  async boot(id: string, opts?: BootOptions): Promise<Vm> {
+    if (typeof id !== 'string') {
+      throw new Arm64JSError('invalid-input', 'boot takes an image name or a snapshot id');
+    }
+    const own = await this.load();
+    if (!isSnapshotId(id)) return this.bootOn(own, id, opts);
+    // The engine the snapshot was saved on. An unreadable record is left to the
+    // boot below to report.
+    const saved = (await own.host.getSnapshot(id).catch(() => null))?.engine;
+    const other = saved && saved !== own.engine && engineParts(saved) ? saved : null;
+    // An older engine may not know what a newer one saved, even in the same format.
+    if (other && isNewerEngine(other, own.engine)) return this.bootOn(await this.load(other), id, opts);
+    try {
+      return await this.bootOn(own, id, opts);
+    } catch (e) {
+      // A changed snapshot format: only the engine it was saved on can resume it.
+      if (!other || (e as Arm64JSError).code !== 'engine-mismatch') throw e;
+      return this.bootOn(await this.load(other), id, opts);
+    }
+  }
+
+  private async bootOn(loaded: Loaded, id: string, opts?: BootOptions): Promise<Vm> {
+    const { vmId } = await owned(loaded.host.boot(id, opts));
+    const vm = new Vm(vmId, loaded.host, loaded.engine, (v) => this.vms.delete(v));
     this.vms.add(vm);
     return vm;
   }
@@ -417,12 +440,13 @@ class Runtime {
   }
 
   async shutdown(): Promise<void> {
-    if (!this.loading) return;
-    const loaded = await this.loading.catch(() => null);
+    const loads = [...this.engines];
+    if (loads.length === 0) return;
+    const loaded = await Promise.all(loads.map(([, p]) => p.catch(() => null)));
     for (const vm of [...this.vms]) await vm.dispose().catch(() => {});
     this.vms.clear();
-    loaded?.dispose();
-    this.loading = null;
+    for (const l of loaded) l?.dispose();
+    for (const [engine, p] of loads) if (this.engines.get(engine) === p) this.engines.delete(engine);
   }
 }
 
@@ -431,13 +455,13 @@ class Runtime {
 export function createArm64JS(deps: Arm64JSDeps = {}) {
   const rt = new Runtime(deps);
   return {
-    /** Choose the engine. Must run before the first `boot`. */
-    configure: (config: Arm64JSConfig) => rt.configure(config),
-    /** Boot a CDN image (`'alpine'`, `'alpine:2'`) or one of this browser's snapshots (its id or info). */
-    boot: (target: string | SnapshotInfo, opts?: BootOptions) => rt.boot(target, opts),
+    /** Boot a CDN image (`'alpine'`, `'alpine:2'`) or one of this browser's snapshots by id.
+     *  A snapshot boots on the engine it was saved on when this page's own cannot resume it. */
+    boot: (target: string, opts?: BootOptions) => rt.boot(target, opts),
     /** `'inline'` when the VM runs in this page, `'frame'` when in the CDN's frame. */
     mode: () => rt.mode(),
-    /** The exact engine version in use, e.g. `'0.11'`. */
+    /** This page's engine, e.g. `'0.11'`. A VM booted from a snapshot may run on
+     *  another: see `vm.engine`. */
     engine: () => rt.engine(),
     snapshots: {
       list: () => rt.listSnapshots(),

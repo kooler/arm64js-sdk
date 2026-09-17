@@ -1,0 +1,29 @@
+# Publish `@arm64js/protocol` to npm on a tag `protocol-v<version>`
+# (protocol-v1.0.0). The version must equal the tag. Publish it before the
+# engine or the SDK starts using that version.
+name: Publish protocol
+on:
+  push:
+    tags: ['protocol-v[0-9]+.[0-9]+.[0-9]+']
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: the tag names the protocol version
+        run: |
+          set -euo pipefail
+          v=$(node -p 'require("./protocol/package.json").version')
+          [ "protocol-v$v" = "$GITHUB_REF_NAME" ] || { echo "protocol/package.json is $v but the tag is $GITHUB_REF_NAME" >&2; exit 1; }
+      - run: npm test
+      - run: npm publish -w @arm64js/protocol --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

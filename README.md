@@ -234,7 +234,7 @@ Disposes every VM and, in frame mode, the frames.
 
 ### Errors
 
-Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `contract-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `unmount-failed`, `write-failed`, `read-failed`.
+Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `protocol-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `unmount-failed`, `write-failed`, `read-failed`.
 
 ## Terminal (optional)
 
@@ -265,6 +265,8 @@ npm install
 npm test
 npm run build
 ```
+
+`protocol/` is the `@arm64js/protocol` package, which the engine uses too. To change it, bump its version and publish it (tag `protocol-v<version>`), update it in the engine and release the engine, then release this package.
 
 ## License
 

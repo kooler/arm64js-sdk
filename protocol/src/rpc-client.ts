@@ -1,7 +1,6 @@
 // The page's half of the frame RPC: a `Host` whose every call crosses a
-// `MessagePort` to the `RpcServer` in the frame. Vendored verbatim by the SDK
-// repo beside `contract.ts`, so it imports nothing but the contract and names
-// no runtime internals.
+// `MessagePort` to the engine's `RpcServer` in the frame. It imports nothing
+// but the protocol and names no runtime internals.
 //
 // Callbacks cannot cross the port, so the `Host`'s three are events:
 // `onProgress` correlated by call id, `onOutput` switched on with
@@ -25,7 +24,7 @@ import {
   type SnapshotOptions,
   type VmExit,
   type WriteFileOptions,
-} from './contract.js';
+} from './protocol.js';
 
 /// The port shape both ends use (a `MessagePort`, or a double in tests).
 export interface PortLike {
@@ -51,9 +50,9 @@ export interface ClientTimers {
   clearInterval(handle: unknown): void;
 }
 
-/// Reports an engine without the file-sharing ops as `share-unavailable`. Older
-/// servers (engine 0.3) refuse them with the message `unknown op: <op>`, and that
-/// is all there is to match on.
+/// Reports an engine without the file-sharing ops as `share-unavailable`. Its
+/// server refuses them with the message `unknown op: <op>`, and that is all
+/// there is to match on.
 function fileOp<T>(p: Promise<T>): Promise<T> {
   return p.catch((e: unknown) => {
     const err = e as { code?: string; message?: string };
@@ -176,8 +175,8 @@ export class RpcClient implements Host {
     return this.call('boot', [target, rest], onProgress as ((p: unknown) => void) | undefined);
   }
 
-  exec(vmId: string, script: string, opts: ExecOptions = {}) {
-    return this.call<ExecResult>('exec', [vmId, script, opts]);
+  exec(vmId: string, command: string, opts: ExecOptions = {}) {
+    return this.call<ExecResult>('exec', [vmId, command, opts]);
   }
 
   onOutput(vmId: string, cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void {

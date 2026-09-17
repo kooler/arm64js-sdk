@@ -23,12 +23,16 @@
   ],
   "scripts": {
     "stamp": "node scripts/stamp-version.mjs",
-    "build": "npm run stamp && tsc -p tsconfig.build.json",
-    "typecheck": "npm run stamp && tsc --noEmit",
-    "test": "npm run stamp && vitest run",
+    "build:protocol": "npm run build -w @arm64js/protocol",
+    "build": "npm run stamp && npm run build:protocol && node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "typecheck": "npm run stamp && npm run build:protocol && tsc --noEmit",
+    "test": "npm run stamp && npm run build:protocol && vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@arm64js/protocol": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.0",
@@ -49,5 +53,8 @@
     "@xterm/xterm": {
       "optional": true
     }
-  }
+  },
+  "workspaces": [
+    "protocol"
+  ]
 }
