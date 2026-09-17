@@ -2,7 +2,7 @@
 // and dispose detaches everything. xterm is replaced by a recording double.
 // Also pins that nothing but this entry point names xterm.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -152,7 +152,11 @@ describe('packaging', () => {
   });
 
   it('exports the terminal as its own entry, with xterm as an optional peer', () => {
-    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
+      exports: Record<string, { default: string }>;
+      dependencies?: Record<string, string>;
+      peerDependenciesMeta: Record<string, { optional: boolean }>;
+    };
     expect(pkg.exports['./terminal'].default).toBe('./dist/terminal.js');
     expect(pkg.dependencies ?? {}).not.toHaveProperty('@xterm/xterm');
     expect(pkg.peerDependenciesMeta['@xterm/xterm'].optional).toBe(true);

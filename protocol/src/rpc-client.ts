@@ -157,7 +157,7 @@ export class RpcClient implements Host {
     if (this.lost) return Promise.reject(new Arm64JSError('vm-lost', 'the VM frame stopped answering'));
     const id = ++this.seq;
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.pending.set(id, { resolve, reject });
       if (onProgress) this.progress.set(id, onProgress);
       try {
         this.port.postMessage({ kind: RPC_KIND, v: 1, id, op, args } satisfies RpcCall);

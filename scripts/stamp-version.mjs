@@ -1,5 +1,5 @@
-// Write src/version.ts from package.json, so the default engine pin is the
-// package's own X.Y and cannot drift from what npm publishes.
+// Write src/version.ts from package.json, so the engine this package loads is
+// its own X.Y and cannot drift from what npm publishes.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 

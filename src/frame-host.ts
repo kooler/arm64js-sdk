@@ -7,27 +7,29 @@
 
 import {
   Arm64JSError,
-  PROTOCOL_VERSION,
   FRAME_MESSAGE_KIND,
   FRAME_OP_CONNECT,
+  PROTOCOL_VERSION,
   type FrameConnect,
   type FrameHandshake,
   type Host,
 } from '@arm64js/protocol';
 import { RpcClient } from '@arm64js/protocol/rpc-client';
 
-/// How long the frame gets to say hello before the page gives up on it: a frame
-/// that never runs a script (blocked third-party frames, a network failure).
+/**
+ * How long the frame gets to say hello before the page gives up on it: a frame
+ * that never runs a script (blocked third-party frames, a network failure).
+ */
 export const FRAME_HANDSHAKE_TIMEOUT_MS = 8_000;
 
-/// The message the developer sees when the browser cannot isolate the frame.
+/** The message the developer sees when the browser cannot isolate the frame. */
 export const UNSUPPORTED_MESSAGE =
   'arm64js needs SharedArrayBuffer, and this browser cannot isolate the VM frame on its own ' +
   '(Document-Isolation-Policy is Chrome/Edge 137+). To run here, serve your page with ' +
   'Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp ' +
   'so that crossOriginIsolated is true; the SDK then runs inline in every browser.';
 
-/// Seams for tests: how the iframe is made and how messages arrive.
+/** Seams for tests: how the iframe is made and how messages arrive. */
 export interface FrameDeps {
   document?: Pick<Document, 'createElement' | 'body'>;
   view?: Pick<Window, 'addEventListener' | 'removeEventListener'>;
@@ -45,7 +47,7 @@ export interface FrameHost {
   dispose(): void;
 }
 
-/// Mount the frame for `frameUrl`, wait for its handshake, hand it a port.
+/** Mount the frame for `frameUrl`, wait for its handshake, hand it a port. */
 export function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<FrameHost> {
   const doc = deps.document ?? document;
   const view = deps.view ?? window;

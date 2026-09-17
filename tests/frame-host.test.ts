@@ -3,9 +3,9 @@
 // protocol mismatch by name, silence by the timeout, and a good handshake ends
 // with one connect message carrying a port.
 
+import { FRAME_MESSAGE_KIND, PROTOCOL_VERSION } from '@arm64js/protocol';
 import { MessageChannel } from 'node:worker_threads';
 import { describe, expect, it } from 'vitest';
-import { FRAME_MESSAGE_KIND, PROTOCOL_VERSION } from '@arm64js/protocol';
 import { mountFrameHost, type FrameDeps } from '../src/frame-host.ts';
 
 function fakePage() {
@@ -37,7 +37,7 @@ function fakePage() {
     view: {
       addEventListener: (_t: string, cb: (e: unknown) => void) => listeners.add(cb),
       removeEventListener: (_t: string, cb: (e: unknown) => void) => listeners.delete(cb),
-    } as never,
+    },
     setTimeout: (cb) => ((timeoutCb = cb), 1),
     clearTimeout: () => {},
     makeChannel: () => new MessageChannel() as never,

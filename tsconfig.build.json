@@ -5,6 +5,7 @@
     "declaration": true,
     "outDir": "dist",
     "rootDir": "src",
+    "stripInternal": true,
     "allowImportingTsExtensions": false
   },
   "include": ["src"]

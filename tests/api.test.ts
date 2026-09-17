@@ -2,9 +2,9 @@
 // check, VM handles, the snapshot and storage calls, and booting a snapshot on
 // the engine it was saved on.
 
-import { describe, expect, it, vi } from 'vitest';
 import { Arm64JSError, PROTOCOL_VERSION, type Host, type SnapshotInfo } from '@arm64js/protocol';
-import { createArm64JS } from '../src/index.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { createArm64JS } from '../src/api.ts';
 import { packageEngine } from '../src/loader.ts';
 
 function fakeHost(): Host & { calls: unknown[][] } {
@@ -176,7 +176,7 @@ describe('Arm64JS', () => {
         urls.push(url);
         const engine = engineOf(url);
         const host = fakeHost();
-        const boot = host.boot;
+        const boot = host.boot.bind(host);
         host.boot = async (target, opts) => {
           if (engine === '0.5' && refused.has(target)) throw new Arm64JSError('engine-mismatch', 'another format');
           await boot(target, opts);

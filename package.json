@@ -29,17 +29,27 @@
     "test": "npm run stamp && npm run build:protocol && vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "lint": "npm run stamp && npm run build:protocol && eslint .",
+    "prepare": "husky"
   },
   "dependencies": {
     "@arm64js/protocol": "^1.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "prettier": "^3.3.0",
+    "eslint": "^10.10.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-perfectionist": "^5.11.1",
+    "globals": "^17.12.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "prettier": "3.9.6",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.70.0",
     "vitest": "^2.1.0"
   },
   "peerDependencies": {
@@ -56,5 +66,14 @@
   },
   "workspaces": [
     "protocol"
-  ]
+  ],
+  "lint-staged": {
+    "*.{ts,js,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "!(*.{ts,js,mjs})": [
+      "prettier --write --ignore-unknown"
+    ]
+  }
 }

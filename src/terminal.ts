@@ -9,7 +9,7 @@
 
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
-import type { Vm } from './index.js';
+import type { Vm } from './vm.js';
 
 export interface TerminalOptions {
   /** Size the terminal to its element, now and whenever the element resizes
@@ -28,11 +28,13 @@ export interface AttachedTerminal {
   dispose(): void;
 }
 
-/// How long the element must stay one size before the guest hears it, so a
-/// drag repaints a full-screen program once rather than per frame.
+/**
+ * How long the element must stay one size before the guest hears it, so a
+ * drag repaints a full-screen program once rather than per frame.
+ */
 const RESIZE_SETTLE_MS = 100;
 
-/// Show a VM's console in `element` and send what is typed there to the guest.
+/** Show a VM's console in `element` and send what is typed there to the guest. */
 export function attachTerminal(vm: Vm, element: HTMLElement, opts: TerminalOptions = {}): AttachedTerminal {
   const xterm = new Terminal({ convertEol: true, cursorBlink: true, ...opts.xterm });
   const fitAddon = new FitAddon();
