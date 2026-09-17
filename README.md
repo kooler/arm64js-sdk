@@ -1,65 +1,105 @@
-# arm64js SDK
+# ARM64JS SDK
 
-arm64js is a WebAssembly based arm64 emulator running in web browser allowing to boot and control a real Linux (Alpine).
+arm64js is a WebAssembly based arm64 emulator running in web browser and allowing to boot and control a real Linux (Alpine).
 
-This SDK provides a way to create a VM, set it up and interact with it. The SDK is distributed as npm package and integrated with arm64js CDN.
+This SDK helps to: create a VM, set it up and interact with it. The SDK is distributed as npm package and integrated with arm64js CDN.
 
-## VM lifecycle
+## VM creation lifecycle
 
-1. _Boot a base image._ Similarly to Docker you need to select one of the available base images to boot your VM. Only base images provided by arm64js can be used at the moment as they require some customization to work "quick" when being emulated in web browser. For now only 'alpine' is provided. Booting the image creates VM instance:
+1. _Boot a base image._ Similarly to Docker you need to select a base images to boot the initial state of your VM. At the moment only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in web browser. For now only 'alpine' is provided. Booting the image creates a VM instance:
 
 ```js
 import { Arm64JS } from 'arm64js';
 const vm = await Arm64JS.boot('alpine');
 ```
 
-2. _Setup the VM._ You would likely want to install some extra packages or copy files into your VM so that it can do something useful. To manage packages use `apk` as you would in the native Alpine. To execute a command (any command pretty much) the `vm.exec` method is used:
+2. _Setup the VM._ You would likely want to install some extra packages or copy files into your VM so that it can do something useful. For managing packages use `apk` as you would in the native Alpine. To execute a command (any command pretty much) the `vm.exec` method is used:
 
 ```js
 const { output, exitCode } = await vm.exec('apk add --no-cache curl');
 ```
 
-it returns raw `output` and `exitCode` so that you can verify if it worked.
+it returns raw `output` and `exitCode` so that you can verify the result.
 
-The VM doesn't have access to the internet except the apk registry. To give it your own data, copy files in or mount them (`vm.writeFile` and `vm.mount` below):
+The VM _does not_ have access to the Internet except the apk registry. To give it your own data, you can use on of the two options:
+
+- `vm.writeFile`: copies specified file into the VM. Changing or deleting the file happens only inside the VM. File is saved and loaded with the snapshot. Uses VM memory to copy the file, thus is indended mainly for smaller (up to 100Mb) files.
+- `vm.mount`: read-only, direct mount of the data blob. Doesn't use any VM memory. Not stored in the snapshot. To unmount use `vm.unmount()`.
+
+See example below:
 
 ```js
-await vm.writeFile('/root/data.csv', file); // a copy, kept in guest memory
-const result = await vm.readFile('/root/result.txt'); // a copy out, as a Blob
-await vm.mount({ 'model.bin': bigFile }, '/data'); // read in place, any size
+await vm.writeFile('/root/data.csv', file); // creates a physical file a the VM
+await vm.mount({ 'model.bin': bigFile }, '/data'); // read-only, directly mounted blob, does not copy anything into the VM so can be large file
 ```
 
+To read any file from the VM use `readFile`:
+
 ```js
-import { Arm64JS } from 'arm64js';
+const result = await vm.readFile('/root/result.txt'); // a copy out, as a Blob
+```
 
-const vm = await Arm64JS.boot('alpine');
-const { output, exitCode } = await vm.exec('apk add --no-cache curl && curl --version');
-const snap = await vm.snapshot({ name: 'with curl' });
-await vm.dispose();
+3. _Make a snapshot and save it locally_. Once you are done with VM setup you would likely want to save it so that you don't need to do the same setup again. For that make a snapshot of the VM. Snapshots are stored in the [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system).
 
-// later, even after a reload:
+```js
+const snap = await vm.snapshot({ name: 'alpine with curl' });
+console.log(snap.id); // this is the id we'd need to store to load the snapshot later
+```
+
+To load from the snapshot specify it's ID when creating the VM:
+
+```js
 const again = await Arm64JS.boot(snap.id);
 ```
 
-If your page sends a Content-Security-Policy, it needs to allow that origin: `script-src https://cdn.arm64js.com`, `connect-src https://cdn.arm64js.com`, `worker-src blob:` (the VM's workers are started through a blob, which is what lets them load cross-origin), and `frame-src https://cdn.arm64js.com` for the frame path below.
+## Where the VM runs
+
+The VM needs `SharedArrayBuffer` which browsers only give to cross-origin-isolated pages. If `Cross-Origin-Opener-Policy` (COOP) header is not specified or not sufficient, the SDK will load VM inside the iframe on cdn.arm64js.com domain.
+
+The following decision process is being used:
+
+| Your page                                                                                        | What happens                                                                                   |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` | the VM runs **inline**, in your page's own workers. Works in all modern browsers.              |
+| sends no COOP headers (likely)                                                                   | the VM runs in a hidden **frame** served from the arm64js. Works only in Chrome and Edge 137+. |
+| no COOP header and browser that doesn't support iframe fallback (Firefox, Safari)                | `boot()` rejects with `unsupported-browser`.                                                   |
+
+Call `Arm64JS.mode()` to see which mode is being used. The API is the same in both.
+
+### Setting the headers
+
+To run the VM inline, send these two headers with the HTML of the page that runs the VM:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+We recommend setting them only on the pages that run the VM, not on the whole site, because they change how the browser treats a page:
+
+- files from other domains (scripts, images, fonts, iframes) load only if their server allows it with a `Cross-Origin-Resource-Policy` or CORS header. The arm64js CDN already does.
+- popups the page opens lose their link to it, which can break sign-in or payment popups.
+
+Here's an example how to send them with nginx:
+
+```nginx
+location = /playground.html {
+    add_header Cross-Origin-Opener-Policy same-origin;
+    add_header Cross-Origin-Embedder-Policy require-corp;
+}
+```
+
+To check the setup run `await Arm64JS.mode()`, it should return `'inline'`.
+
+### Content-Security-Policy
+
+If your page sends a Content-Security-Policy and you would like to use iframe based solution, you need to allow arm64js CDN as origin: `script-src https://cdn.arm64js.com`, `connect-src https://cdn.arm64js.com`, `worker-src blob:` (the VM's workers are started through a blob), and `frame-src https://cdn.arm64js.com` for the iframe itself.
 
 ## Install
 
 ```sh
 npm install arm64js
 ```
-
-## Where the VM runs
-
-The VM needs `SharedArrayBuffer`, which browsers only give to cross-origin-isolated pages. You do not have to set anything up:
-
-| Your page                                                                                        | What happens                                                                                                                    |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` | the VM runs **inline**, in your page's own workers. Every browser.                                                              |
-| sends no such headers (the usual case)                                                           | the VM runs in a hidden **frame** served from the CDN that isolates itself (`Document-Isolation-Policy`). Chrome and Edge 137+. |
-| neither works (Firefox, Safari, without your headers)                                            | `boot()` rejects with `unsupported-browser`, and the message says which two headers make it run inline.                         |
-
-`Arm64JS.mode()` tells you which one you got. The API is the same in both.
 
 ## API
 
