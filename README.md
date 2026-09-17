@@ -6,7 +6,7 @@ This SDK helps to: create a VM, set it up and interact with it. The SDK is distr
 
 ## VM creation lifecycle
 
-1. _Boot a base image._ Similarly to Docker you need to select a base images to boot the initial state of your VM. At the moment only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in web browser. For now only 'alpine' is provided. Booting the image creates a VM instance:
+1. _Boot a base image._ Similarly to Docker you need to select a base images to boot the initial state of your VM. At the moment only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in web browser. The list of images and their versions is at [arm64js.com/images](https://arm64js.com/images/). Booting the image creates a VM instance:
 
 ```js
 import { Arm64JS } from 'arm64js';
@@ -103,38 +103,39 @@ npm install arm64js
 
 ## API
 
-### `Arm64JS.configure({ engine })`
+### `Arm64JS.boot(image | snapshotId, { vcpus?, onProgress? })` → `Vm`
 
-Which engine to load. Default: the version this package was released with (`v<major>.<minor>` of the package version), exact and never rewritten. `'v0'` follows the newest 0.x on the CDN; `'latest'` the newest of all. Call it before the first `boot`.
+A VM can be created either from a based image or your own local snapshot.
 
-One engine runs per page. A snapshot records the engine it was saved on and boots only on an engine that can resume it; see Versions below.
+- `image` name of an image on the CDN ([all images](https://arm64js.com/images/)): `'alpine'` is the newest version of it, `'alpine:2'` a fixed one, `'alpine@sha256:<hash>'` an exact snapshot.
+- 'snapshotId': a snapshot id (`snap.id`, 64 hex characters) loads one of your own snapshots made previously.
 
-### `Arm64JS.boot(image | snapshotId | snapshot, { vcpus?, onProgress? })` → `Vm`
+Additionally you can specify `onProgress` callback to track VM loading phases (`resolve → manifest → start → memory (repeats, with counts) → run → done`) and number of virtuals CPUs the VM will have (more is not always better).
 
-`image` names an image on the CDN: `'alpine'` is the newest version of it, `'alpine:2'` a fixed one, `'alpine@sha256:<hash>'` an exact snapshot. A 64-character hex string, or a `SnapshotInfo`, boots one of this browser's snapshots.
+### `vm.exec(command, { timeoutMs? })` → `{ output, exitCode, truncated }`
 
-`onProgress` reports `resolve → manifest → start → memory (repeats, with counts) → run → done`.
+Runs `command` in the guest's shell (`sh`), and returns what it printed and its exit status. `command` can be one command or several, one per line. The default timeout is two minutes.
 
-### `vm.exec(script, { timeoutMs? })` → `{ output, exitCode, truncated }`
+It works by typing the command into the guest's serial console and reading the bytes back. There are few limits:
 
-Runs `script` as a shell script in the guest (`sh`), one call at a time per VM, and returns what it printed and its exit status.
-
-It works by typing the script into the guest's serial console and reading the bytes back, which sets four limits worth knowing:
-
-- **stdout and stderr are one stream.** There is one console; redirect inside the script if you need them apart.
-- **Each line of the script must be under 4000 bytes** (the guest terminal's own line buffer).
+- stdout and stderr are merged into one stream.
+- Each line of the command must be under 4000 bytes.
 - **`output` is capped at 1 MiB**, and past that the head is dropped and `truncated` is `true`. Write to a file and read it back if you need more.
-- **A timeout leaves the guest where it was.** The default is two minutes; on `exec-timeout` the SDK interrupts whatever held the terminal so the next `exec` is not typed into it, which works for anything that answers Ctrl-C and not for anything that does not. The VM keeps running either way.
+- A timeout does its best to terminate the command (sends Ctrl-C to the VM's console), but that does not guarantee that the command will stop -- a program that ignores Ctrl-C (like vim) will keep running.
 
-Whatever the script does runs as **root** in the guest. That guest is a VM in the visitor's own browser with no path back to your servers, but it is a real root shell: treat the script the way you would treat any code you hand a machine.
+Whatever the command does runs as **root** in the guest. That guest is a VM in the visitor's own browser with no path back to your servers, but it is a real root shell: treat the command the way you would treat any code you hand a machine.
 
 ### `vm.onOutput(cb)` → unsubscribe
 
-The raw bytes the guest prints on its console, escape sequences included, and `info.exec`, which is true for what an `exec` printed (its script, its output and the prompts around it). A terminal of your own should skip those; the one below does.
+The raw bytes the guest prints on its console including escape sequences included.
 
-### `vm.write(data)` / `vm.resize(cols, rows)`
+### `vm.write(data)`
 
-Type into the guest's console and set its terminal size, for wiring up a terminal of your own. Input sent while an `exec` or `snapshot` runs is held and delivered after it, so it never lands inside a script. Needs engine 0.3 or newer.
+Send data directly into VM console, lower level than `vm.exec`, allows sending any keyboard sequences including key presses like Ctrl-C ('\x03') or Enter ('\r').
+
+### `vm.resize(cols, rows)`
+
+Set terminal console size. Mainly useful if you are writing your own terminal implementation. If you want to use a terminal with your VM it's easier to connect xterm (see "Terminal" section below).
 
 ### `vm.onExit(cb)` → unsubscribe
 
@@ -194,9 +195,13 @@ Snapshots kept by this browser, newest first: `{ id, name, created, base, engine
 
 Snapshots live where the VM runs: on your origin in inline mode, on the CDN's origin (partitioned to your site) in frame mode. They do not cross between the two. Safari clears script storage after seven days without a visit.
 
+### `Arm64JS.engine()` → `'0.4'`
+
+The engine this page runs: the one this package was released with. A VM booted from a snapshot can run on another; `vm.engine` says which.
+
 ### `Arm64JS.shutdown()`
 
-Disposes every VM and, in frame mode, the frame.
+Disposes every VM and, in frame mode, the frames.
 
 ### Errors
 
@@ -226,16 +231,15 @@ The guest has a network card, DNS, and can install Alpine packages with `apk` th
 
 ## Versions
 
-Package `X.Y.Z` pins engine `X.Y` on the CDN, and that engine is what every `boot` on the page uses. A new engine is a new `X.Y` and a new package version; exact versions on the CDN are never rewritten.
+Package `X.Y.Z` runs engine `X.Y` from the CDN. A new engine is a new `X.Y` and a new package version. Engine versions on the CDN are never changed or removed.
 
-Most engine releases change nothing about the snapshot format, and snapshots saved on an older one keep booting. When a release does change it, booting an older snapshot rejects with `engine-mismatch` — the snapshot is intact, but this engine cannot resume it. Two ways out:
+Snapshots keep booting after you update the package:
 
-- pin the package (and so the engine) the snapshots were made with, which keeps working because old engines stay on the CDN; or
-- treat snapshots as a cache: catch `engine-mismatch`, `Arm64JS.snapshots.remove(id)`, and boot the image again.
+- Most engine releases don't change the snapshot format, so a snapshot saved on an older engine boots on the new one.
+- When a release does change it, the SDK boots the snapshot on the engine it was saved on (`SnapshotInfo.engine`), loaded from the CDN next to this page's engine. That VM can only do what its engine supports: for example, `writeFile` on engine 0.3 rejects with `share-unavailable`.
+- A snapshot saved on a newer engine than this page's (after going back to an older package, or from another page of your site) boots on that newer engine. If that engine needs a newer package, `boot` rejects with `contract-mismatch`.
 
-`SnapshotInfo.engine` says which engine each one needs.
-
-One exception: a snapshot saved on engine 0.4 or newer from an image with file sharing does not boot on engine 0.3. It fails with `boot-failed`.
+Each extra engine is one more download and, in frame mode, one more hidden frame.
 
 ## Development
 
