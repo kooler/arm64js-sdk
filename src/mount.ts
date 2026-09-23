@@ -26,7 +26,9 @@ export function guestPath(path: string): string {
 /** The record of Blobs the runtime takes. */
 export function mountFiles(source: MountSource): Record<string, Blob> {
   const files = recordOf(source);
-  if (Object.keys(files).length === 0) throw new Arm64JSError('invalid-input', 'mount: no files to share');
+  if (Object.keys(files).length === 0) {
+    throw new Arm64JSError('invalid-input', 'mount: no files to share');
+  }
   return files;
 }
 
@@ -34,8 +36,9 @@ function recordOf(source: MountSource): Record<string, Blob> {
   if (!source || typeof source !== 'object') {
     throw new Arm64JSError('invalid-input', 'mount takes a record of Blobs or a list of Files');
   }
-  if (source instanceof Blob)
+  if (source instanceof Blob) {
     throw new Arm64JSError('invalid-input', 'mount: name the Blob, e.g. { "data.bin": blob }');
+  }
   const list = source as Partial<Iterable<File>> & Partial<ArrayLike<File>>;
   if (typeof list[Symbol.iterator] === 'function' || typeof list.length === 'number') {
     return filesRecord(source as Iterable<File>);
@@ -47,7 +50,9 @@ function recordOf(source: MountSource): Record<string, Blob> {
     throw new Arm64JSError('invalid-input', 'mount takes a record of Blobs or a list of Files');
   }
   for (const [name, blob] of Object.entries(source as Record<string, unknown>)) {
-    if (!(blob instanceof Blob)) throw new Arm64JSError('invalid-input', `mount: ${name} is not a Blob`);
+    if (!(blob instanceof Blob)) {
+      throw new Arm64JSError('invalid-input', `mount: ${name} is not a Blob`);
+    }
   }
   return source as Record<string, Blob>;
 }
@@ -59,7 +64,9 @@ function filesRecord(source: Iterable<File> | ArrayLike<File>): Record<string, B
     if (!(file instanceof Blob) || typeof (file as { name?: unknown }).name !== 'string') {
       throw new Arm64JSError('invalid-input', 'mount: every item in a list must be a File');
     }
-    if (file.name in record) throw new Arm64JSError('invalid-input', `mount: two files are named ${file.name}`);
+    if (file.name in record) {
+      throw new Arm64JSError('invalid-input', `mount: two files are named ${file.name}`);
+    }
     record[file.name] = file;
   }
   return record;

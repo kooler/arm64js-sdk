@@ -4,7 +4,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
-if (!/^\d+\.\d+\.\d+/.test(pkg.version)) throw new Error(`package.json version is not semver: ${pkg.version}`);
+if (!/^\d+\.\d+\.\d+/.test(pkg.version)) {
+  throw new Error(`package.json version is not semver: ${pkg.version}`);
+}
 const out = fileURLToPath(new URL('../src/version.ts', import.meta.url));
 writeFileSync(
   out,

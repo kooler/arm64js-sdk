@@ -20,6 +20,14 @@ function fakeHost(): Host & { calls: unknown[][] } {
       return { output: 'ok', exitCode: 0, truncated: false };
     },
     onOutput: () => () => {},
+    async write() {},
+    async resize() {},
+    async mount() {},
+    async unmount() {},
+    async writeFile() {},
+    async readFile() {
+      return new Blob([]);
+    },
     onExit: () => () => {},
     async dispose(vmId) {
       calls.push(['dispose', vmId]);
@@ -81,7 +89,7 @@ describe('Arm64JS', () => {
     expect(snap.name).toBe('s');
     await vm.dispose();
     await vm.dispose();
-    expect(() => vm.exec('true')).toThrow(/disposed/);
+    await expect(vm.exec('true')).rejects.toThrow(/disposed/);
     expect(host.calls.filter((c) => c[0] === 'dispose')).toHaveLength(1);
     await sdk.boot(snap.id);
     expect(host.calls.at(-1)).toEqual(['boot', snap.id, undefined]);
@@ -89,7 +97,7 @@ describe('Arm64JS', () => {
     await expect(sdk.boot(snap as never)).rejects.toMatchObject({ code: 'invalid-input' });
   });
 
-  it('passes console input and size through, and says so on an engine without them', async () => {
+  it('passes console input and size through', async () => {
     const host = fakeHost();
     const inputs: unknown[][] = [];
     const withInput = {
@@ -108,14 +116,6 @@ describe('Arm64JS', () => {
       ['write', 'vm1', 'ls\r'],
       ['resize', 'vm1', 100, 30],
     ]);
-
-    const older = createArm64JS({
-      isolated: true,
-      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.2', createHost: () => fakeHost() }),
-    });
-    const vm2 = await older.boot('alpine');
-    await expect(vm2.write('x')).rejects.toMatchObject({ code: 'invalid-input', message: /0\.3/ });
-    await expect(vm2.resize(80, 24)).rejects.toMatchObject({ code: 'invalid-input' });
   });
 
   it('refuses a runtime speaking another protocol', async () => {
@@ -136,13 +136,19 @@ describe('Arm64JS', () => {
       engine: '0.11',
       mountFrame: async (url) => (mounts.push(url), { host, onLost: (cb) => ((lost = cb), () => {}), dispose }),
     });
-    await sdk.boot('alpine');
+    const vm = await sdk.boot('alpine');
     expect(mounts).toEqual(['https://cdn.arm64js.com/sdk-v0.11/frame.html']);
     expect(await sdk.mode()).toBe('frame');
+    const exits: string[] = [];
+    vm.onExit(({ reason }) => exits.push(reason));
     // A lost frame is torn down, not just forgotten: its workers keep running
     // when only the frame's main thread stopped answering.
     lost!();
     expect(dispose).toHaveBeenCalledTimes(1);
+    expect(exits).toEqual(['lost']);
+    // A listener added after the loss hears it too, as after any exit.
+    const late = await new Promise<string>((resolve) => vm.onExit(({ reason }) => resolve(reason)));
+    expect(late).toBe('lost');
     await sdk.boot('alpine');
     expect(mounts).toHaveLength(2);
     await sdk.shutdown();
@@ -178,7 +184,9 @@ describe('Arm64JS', () => {
         const host = fakeHost();
         const boot = host.boot.bind(host);
         host.boot = async (target, opts) => {
-          if (engine === '0.5' && refused.has(target)) throw new Arm64JSError('engine-mismatch', 'another format');
+          if (engine === '0.5' && refused.has(target)) {
+            throw new Arm64JSError('engine-mismatch', 'another format');
+          }
           await boot(target, opts);
           return { vmId: `${engine}:${target[0]}` };
         };
@@ -293,7 +301,9 @@ describe('Arm64JS', () => {
       ...host,
       mount: async (vmId: string, files: unknown, path: string) => {
         calls.push(['mount', vmId, files, path]);
-        if (refuse) throw Object.assign(new Error('something is already mounted'), { code: 'invalid-input' });
+        if (refuse) {
+          throw Object.assign(new Error('something is already mounted'), { code: 'invalid-input' });
+        }
       },
       unmount: async (vmId: string, path: string) => void calls.push(['unmount', vmId, path]),
       writeFile: async (vmId: string, path: string, data: Blob, opts?: unknown) =>
@@ -343,22 +353,33 @@ describe('Arm64JS', () => {
 
     // Nor while the newer mount is still under way.
     const old = await vm.mount(blobs, '/race');
-    const undoing = vm.unmount('/race');
+    await vm.unmount('/race');
     const redoing = vm.mount(blobs, '/race');
     await old.unmount();
-    await undoing;
     const fresh = await redoing;
     expect(calls.filter((c) => c[0] === 'unmount' && c[2] === '/race')).toHaveLength(1);
     await fresh.unmount();
     expect(calls.filter((c) => c[0] === 'unmount' && c[2] === '/race')).toHaveLength(2);
 
-    // A refused mount leaves the earlier handle in charge.
+    // A mounted path is refused without asking the runtime, and the earlier
+    // handle stays in charge.
+    const mountCalls = () => calls.filter((c) => c[0] === 'mount').length;
     const live = await vm.mount(blobs, '/busy');
+    const before = mountCalls();
+    await expect(vm.mount(blobs, '/busy/')).rejects.toMatchObject({ code: 'invalid-input' });
+    expect(mountCalls()).toBe(before);
+    await live.unmount();
+    expect(calls.at(-1)).toEqual(['unmount', 'vm1', '/busy']);
+    // Also while its unmount is still under way.
+    await vm.mount(blobs, '/busy');
+    const undoing = vm.unmount('/busy');
+    await expect(vm.mount(blobs, '/busy')).rejects.toMatchObject({ code: 'invalid-input' });
+    await undoing;
+    // A mount the runtime refuses leaves the path free.
     refuse = true;
     await expect(vm.mount(blobs, '/busy')).rejects.toMatchObject({ code: 'invalid-input' });
     refuse = false;
-    await live.unmount();
-    expect(calls.at(-1)).toEqual(['unmount', 'vm1', '/busy']);
+    await vm.mount(blobs, '/busy');
 
     await vm.writeFile('/etc/motd', 'hello', { mode: 0o644 });
     await vm.writeFile('/a.bin', new TextEncoder().encode('bytes'));
@@ -373,20 +394,9 @@ describe('Arm64JS', () => {
     expect(await read.text()).toBe('read /etc/hostname');
     expect(calls.at(-1)).toEqual(['readFile', 'vm1', '/etc/hostname', { timeoutMs: 1000 }]);
 
-    // A disposed VM throws at once, like the other calls.
+    // A disposed VM rejects, like the other calls.
     await vm.dispose();
-    expect(() => vm.mount(blobs, '/x')).toThrow(/disposed/);
-    expect(() => vm.unmount('/x')).toThrow(/disposed/);
-
-    // An engine before file sharing says which one is needed.
-    const older = createArm64JS({
-      isolated: true,
-      importRuntime: async () => ({ protocol: PROTOCOL_VERSION, engine: '0.3', createHost: () => fakeHost() }),
-    });
-    const vm2 = await older.boot('alpine');
-    await expect(vm2.writeFile('/x', 'x')).rejects.toMatchObject({ code: 'share-unavailable', message: /0\.4/ });
-    await expect(vm2.readFile('/x')).rejects.toMatchObject({ code: 'share-unavailable' });
-    await expect(vm2.mount(blobs, '/x')).rejects.toMatchObject({ code: 'share-unavailable' });
-    await expect(vm2.unmount('/x')).rejects.toMatchObject({ code: 'share-unavailable' });
+    await expect(vm.mount(blobs, '/x')).rejects.toThrow(/disposed/);
+    await expect(vm.unmount('/x')).rejects.toThrow(/disposed/);
   });
 });

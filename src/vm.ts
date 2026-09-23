@@ -1,5 +1,3 @@
-// A running VM, as a page holds it.
-
 import {
   Arm64JSError,
   type ExecOptions,
@@ -12,8 +10,11 @@ import {
   type VmExit,
   type WriteFileOptions,
 } from '@arm64js/protocol';
-import { noConsoleInput, noFileSharing, owned } from './errors.js';
+import { withSdkErrors } from './errors.js';
 import { guestPath, mountFiles, type MountSource } from './mount.js';
+
+/** The `onExit` a VM gets when its frame stops answering. */
+const LOST_EXIT: VmExit = { reason: 'lost' };
 
 /** What `writeFile` takes. */
 export type FileData = Blob | BufferSource | string;
@@ -29,6 +30,8 @@ export interface Mount {
 /** A running VM. */
 export class Vm {
   private disposed = false;
+  private frameLost = false;
+  private readonly exitListeners = new Set<(exit: VmExit) => void>();
   /** The latest `mount` at each path, so an old handle cannot undo a newer one. */
   private readonly mounts = new Map<string, object>();
 
@@ -43,9 +46,9 @@ export class Vm {
 
   /** Run a shell command (one or more lines) in the guest and get its output and
    *  exit code. One at a time per VM. */
-  exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
+  async exec(command: string, opts?: ExecOptions): Promise<ExecResult> {
     this.check();
-    return owned(this.host.exec(this.id, command, opts));
+    return withSdkErrors(this.host.exec(this.id, command, opts));
   }
 
   /** The raw bytes the guest prints on its console. `info.exec` marks what an
@@ -57,116 +60,132 @@ export class Vm {
 
   /** Type into the guest's console, as a person at a terminal would. Input
    *  sent while an `exec` or `snapshot` runs is held and delivered after it. */
-  write(data: string): Promise<void> {
+  async write(data: string): Promise<void> {
     this.check();
-    if (!this.host.write) return Promise.reject(noConsoleInput());
-    return owned(this.host.write(this.id, data));
+    return withSdkErrors(this.host.write(this.id, data));
   }
 
   /** Set the guest's terminal size, so full-screen programs lay out for it. */
-  resize(cols: number, rows: number): Promise<void> {
+  async resize(cols: number, rows: number): Promise<void> {
     this.check();
-    if (!this.host.resize) return Promise.reject(noConsoleInput());
-    return owned(this.host.resize(this.id, cols, rows));
+    return withSdkErrors(this.host.resize(this.id, cols, rows));
   }
 
   /** The guest's run ending (a halt, a fault). Returns the unsubscribe. */
   onExit(cb: (exit: VmExit) => void): () => void {
     this.check();
-    return this.host.onExit(this.id, cb);
+    if (this.frameLost) {
+      queueMicrotask(() => cb(LOST_EXIT));
+      return () => {};
+    }
+    const unsubscribe = this.host.onExit(this.id, cb);
+    this.exitListeners.add(cb);
+    return () => {
+      unsubscribe();
+      this.exitListeners.delete(cb);
+    };
   }
 
   /** Show files to the guest, read-only, in the folder `path` (an absolute
    *  guest path, created if missing). A file is read only as the guest asks, so
    *  its size does not matter. Mounts are not kept in snapshots: mount again
    *  after booting one. */
-  mount(source: MountSource, path: string): Promise<Mount> {
+  async mount(source: MountSource, path: string): Promise<Mount> {
     this.check();
-    if (!this.host.mount) return Promise.reject(noFileSharing());
-    let at: string;
-    let files: Record<string, Blob>;
-    try {
-      at = guestPath(path);
-      files = mountFiles(source);
-    } catch (e) {
-      return Promise.reject(e);
+    const guestDir = guestPath(path);
+    const files = mountFiles(source);
+    if (this.mounts.has(guestDir)) {
+      throw new Arm64JSError('invalid-input', `mount: ${guestDir} is already mounted, unmount it first`);
     }
-    // Taken before the call, so a handle for an earlier mount here sees it is stale.
+    // Taken before the call, so a second mount here is refused while this one runs.
     const token = {};
-    const before = this.mounts.get(at);
-    this.mounts.set(at, token);
+    this.mounts.set(guestDir, token);
     const handle: Mount = {
-      path: at,
+      path: guestDir,
       unmount: async () => {
-        if (this.mounts.get(at) === token) await this.unmount(at);
+        if (this.mounts.get(guestDir) === token) {
+          await this.unmount(guestDir);
+        }
       },
     };
-    return owned(this.host.mount(this.id, files, at)).then(
-      () => handle,
-      (e) => {
-        if (this.mounts.get(at) === token) {
-          if (before) this.mounts.set(at, before);
-          else this.mounts.delete(at);
-        }
-        throw e;
-      },
-    );
+    try {
+      await withSdkErrors(this.host.mount(this.id, files, guestDir));
+    } catch (e) {
+      // An unmount meanwhile may have let a newer mount take the path.
+      if (this.mounts.get(guestDir) === token) {
+        this.mounts.delete(guestDir);
+      }
+      throw e;
+    }
+    return handle;
   }
 
   /** Undo the `mount` at `path`. Idempotent. */
-  unmount(path: string): Promise<void> {
+  async unmount(path: string): Promise<void> {
     this.check();
-    if (!this.host.unmount) return Promise.reject(noFileSharing());
-    let at: string;
-    try {
-      at = guestPath(path);
-    } catch (e) {
-      return Promise.reject(e);
+    const guestDir = guestPath(path);
+    const token = this.mounts.get(guestDir);
+    await withSdkErrors(this.host.unmount(this.id, guestDir));
+    // A mount started meanwhile keeps its token.
+    if (this.mounts.get(guestDir) === token) {
+      this.mounts.delete(guestDir);
     }
-    const token = this.mounts.get(at);
-    return owned(this.host.unmount(this.id, at)).then(() => {
-      // A mount started meanwhile keeps its token.
-      if (this.mounts.get(at) === token) this.mounts.delete(at);
-    });
   }
 
   /** Copy `data` into the guest as the file `path`, replacing it if it exists and
    *  creating its folder if missing. The file lives in guest memory: for a large
    *  one, `mount` it instead. */
-  writeFile(path: string, data: FileData, opts?: WriteFileOptions): Promise<void> {
+  async writeFile(path: string, data: FileData, opts?: WriteFileOptions): Promise<void> {
     this.check();
-    if (!this.host.writeFile) return Promise.reject(noFileSharing());
     let blob: Blob;
-    if (data instanceof Blob) blob = data;
-    else if (typeof data === 'string' || data instanceof ArrayBuffer || ArrayBuffer.isView(data))
+    if (data instanceof Blob) {
+      blob = data;
+    } else if (typeof data === 'string' || data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
       blob = new Blob([data]);
-    else return Promise.reject(new Arm64JSError('invalid-input', 'writeFile takes a Blob, bytes or a string'));
-    return owned(this.host.writeFile(this.id, path, blob, opts));
+    } else {
+      throw new Arm64JSError('invalid-input', 'writeFile takes a Blob, bytes or a string');
+    }
+    return withSdkErrors(this.host.writeFile(this.id, path, blob, opts));
   }
 
   /** Copy the guest's file `path` out, as a `Blob`. The copy is held in page
    *  memory. */
-  readFile(path: string, opts?: ReadFileOptions): Promise<Blob> {
+  async readFile(path: string, opts?: ReadFileOptions): Promise<Blob> {
     this.check();
-    if (!this.host.readFile) return Promise.reject(noFileSharing());
-    return owned(this.host.readFile(this.id, path, opts));
+    return withSdkErrors(this.host.readFile(this.id, path, opts));
   }
 
   /** Save the VM to this browser's storage. The VM keeps running. */
-  snapshot(opts?: SnapshotOptions): Promise<SnapshotInfo> {
+  async snapshot(opts?: SnapshotOptions): Promise<SnapshotInfo> {
     this.check();
-    return owned(this.host.snapshot(this.id, opts));
+    return withSdkErrors(this.host.snapshot(this.id, opts));
   }
 
   /** Stop the VM and free its workers. Idempotent. */
   async dispose(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     this.disposed = true;
     this.onDisposed(this);
-    await owned(this.host.dispose(this.id));
+    await withSdkErrors(this.host.dispose(this.id));
+  }
+
+  /** @internal The frame this VM ran in stopped answering. */
+  lost(): void {
+    if (this.frameLost) {
+      return;
+    }
+    this.frameLost = true;
+    for (const cb of [...this.exitListeners]) {
+      cb(LOST_EXIT);
+    }
+    this.exitListeners.clear();
   }
 
   private check(): void {
-    if (this.disposed) throw new Arm64JSError('vm-lost', 'this VM was disposed');
+    if (this.disposed) {
+      throw new Arm64JSError('vm-lost', 'this VM was disposed');
+    }
   }
 }

@@ -43,8 +43,9 @@ function fakePage() {
     makeChannel: () => new MessageChannel() as never,
   };
   const emit = (data: unknown, over: { source?: unknown; origin?: string } = {}) => {
-    for (const cb of [...listeners])
+    for (const cb of [...listeners]) {
       cb({ source: over.source ?? contentWindow, origin: over.origin ?? 'https://cdn.arm64js.com', data });
+    }
   };
   return {
     deps,

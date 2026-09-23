@@ -12,23 +12,31 @@
 // older engine for a snapshot saved there, so the SDK must then keep speaking
 // the old protocol too.
 
-/// The protocol version. The frame handshake and the runtime module both report
-/// it; the SDK refuses a mismatch with `protocol-mismatch`.
+/**
+ * The protocol version. The frame handshake and the runtime module both report
+ * it; the SDK refuses a mismatch with `protocol-mismatch`.
+ */
 export const PROTOCOL_VERSION = 1;
 
-/// Where the SDK, the runtime and the images live. Fixed: a configurable base
-/// would only let a page point the runtime at chunks built for another engine.
+/**
+ * Where the SDK, the runtime and the images live. Fixed: a configurable base
+ * would only let a page point the runtime at chunks built for another engine.
+ */
 export const CDN_BASE = 'https://cdn.arm64js.com';
 
-/// The frame handshake and the one message the page sends back. Spellings are
-/// pinned by tests on both sides of the origin boundary.
+/**
+ * The frame handshake and the one message the page sends back. Spellings are
+ * pinned by tests on both sides of the origin boundary.
+ */
 export const FRAME_MESSAGE_KIND = 'arm64js-frame';
 export const FRAME_OP_CONNECT = 'connect';
-/// The RPC envelope kind on the connected port.
+/** The RPC envelope kind on the connected port. */
 export const RPC_KIND = 'arm64js';
 
-/// Every way an SDK call can fail. The RPC layer carries these by `code` and
-/// the SDK rethrows them, so a page sees one vocabulary in both modes.
+/**
+ * Every way an SDK call can fail. The RPC layer carries these by `code` and
+ * the SDK rethrows them, so a page sees one vocabulary in both modes.
+ */
 export type Arm64JSErrorCode =
   | 'unsupported-browser'
   | 'protocol-mismatch'
@@ -52,7 +60,7 @@ export type Arm64JSErrorCode =
   | 'write-failed'
   | 'read-failed';
 
-/// The error every SDK-facing failure is reported as.
+/** The error every SDK-facing failure is reported as. */
 export class Arm64JSError extends Error {
   readonly code: Arm64JSErrorCode;
   readonly data?: unknown;
@@ -64,8 +72,10 @@ export class Arm64JSError extends Error {
   }
 }
 
-/// One published build of an image. A snapshot resumes only on an engine whose
-/// `format` and `layout` match, so a record carries one build per epoch.
+/**
+ * One published build of an image. A snapshot resumes only on an engine whose
+ * `format` and `layout` match, so a record carries one build per epoch.
+ */
 export interface ImageBuild {
   /** The deploy that baked it (informational; not what compatibility keys on). */
   engine_release: string;
@@ -83,7 +93,7 @@ export interface ImageBuild {
   built: string;
 }
 
-/// `images/<name>/<version>.json` and `images/<name>/latest.json` on the CDN.
+/** `images/<name>/<version>.json` and `images/<name>/latest.json` on the CDN. */
 export interface ImageRecord {
   name: string;
   version: number;
@@ -93,8 +103,10 @@ export interface ImageRecord {
   share_builds?: ImageBuild[];
 }
 
-/// A boot's progress, as the SDK's `onProgress` sees it. `memory` repeats with
-/// chunk counts while the working set streams in.
+/**
+ * A boot's progress, as the SDK's `onProgress` sees it. `memory` repeats with
+ * chunk counts while the working set streams in.
+ */
 export interface BootProgress {
   stage: 'resolve' | 'manifest' | 'start' | 'memory' | 'run' | 'done';
   done?: number;
@@ -130,12 +142,12 @@ export interface ExecResult {
   truncated: boolean;
 }
 
-/// What `onOutput` says about a chunk. Absent before engine 0.3.
+/** What `onOutput` says about a chunk. */
 export interface OutputInfo {
   exec?: boolean;
 }
 
-/// How a VM's run ended.
+/** How a VM's run ended. */
 export interface VmExit {
   reason: string;
 }
@@ -147,7 +159,7 @@ export interface SnapshotOptions {
   onProgress?: (done: number, total: number) => void;
 }
 
-/// A snapshot kept in this origin's browser storage. `boot(info.id)` resumes it.
+/** A snapshot kept in this origin's browser storage. `boot(info.id)` resumes it. */
 export interface SnapshotInfo {
   id: string;
   name: string | null;
@@ -165,7 +177,7 @@ export interface SnapshotInfo {
   meta: unknown;
 }
 
-/// Files for `mount`: name → `Blob`, read-only, read on demand.
+/** Files for `mount`: name → `Blob`, read-only, read on demand. */
 export type MountFiles = Record<string, Blob>;
 
 export interface WriteFileOptions {
@@ -197,9 +209,11 @@ export interface StorageStatus {
   poolBytes: number;
 }
 
-/// What the runtime offers the SDK: called directly inline, and through the
-/// frame's RPC server otherwise. Every method is async and every argument and
-/// result structured-cloneable, except the callbacks, which become events.
+/**
+ * What the runtime offers the SDK: called directly inline, and through the
+ * frame's RPC server otherwise. Every method is async and every argument and
+ * result structured-cloneable, except the callbacks, which become events.
+ */
 export interface Host {
   /** Boot a CDN image (`'alpine'`, `'alpine:2'`, `'alpine@sha256:<hex>'`) or a
    *  local snapshot by id (64 hex characters). Resolves once the guest is stepping. */
@@ -212,21 +226,20 @@ export interface Host {
    *  a terminal hides. Returns the unsubscribe. */
   onOutput(vmId: string, cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void;
   /** Type into the guest's console, as a person at a terminal would. Held
-   *  while an `exec` or a `snapshot` runs, and sent after it. Absent before
-   *  engine 0.3. */
-  write?(vmId: string, data: string): Promise<void>;
-  /** Set the guest's terminal size. Absent before engine 0.3. */
-  resize?(vmId: string, cols: number, rows: number): Promise<void>;
+   *  while an `exec` or a `snapshot` runs, and sent after it. */
+  write(vmId: string, data: string): Promise<void>;
+  /** Set the guest's terminal size. */
+  resize(vmId: string, cols: number, rows: number): Promise<void>;
   /** Show `files` read-only in the guest folder `path` (absolute, created if
-   *  missing). Not kept in snapshots. Absent before engine 0.4. */
-  mount?(vmId: string, files: MountFiles, path: string): Promise<void>;
-  /** Undo the `mount` at `path`. Absent before engine 0.4. */
-  unmount?(vmId: string, path: string): Promise<void>;
+   *  missing). Not kept in snapshots. */
+  mount(vmId: string, files: MountFiles, path: string): Promise<void>;
+  /** Undo the `mount` at `path`. */
+  unmount(vmId: string, path: string): Promise<void>;
   /** Copy `data` into the guest file `path`, replacing it. The file must fit in
-   *  guest memory; `mount` large files instead. Absent before engine 0.4. */
-  writeFile?(vmId: string, path: string, data: Blob, opts?: WriteFileOptions): Promise<void>;
-  /** Copy the guest file `path` out as a Blob. Absent before engine 0.4. */
-  readFile?(vmId: string, path: string, opts?: ReadFileOptions): Promise<Blob>;
+   *  guest memory; `mount` large files instead. */
+  writeFile(vmId: string, path: string, data: Blob, opts?: WriteFileOptions): Promise<void>;
+  /** Copy the guest file `path` out as a Blob. */
+  readFile(vmId: string, path: string, opts?: ReadFileOptions): Promise<Blob>;
   /** Observe the guest's run ending (a halt, a fault). Returns the unsubscribe. */
   onExit(vmId: string, cb: (exit: VmExit) => void): () => void;
   /** Stop the VM and free its workers. Idempotent. */
@@ -240,16 +253,18 @@ export interface Host {
   storageStatus(): Promise<StorageStatus>;
 }
 
-/// The shape of the runtime module (`sdk-v<X.Y>/arm64js-sdk-lib.js`) the SDK
-/// imports. `engine` is the CDN version tag (`'0.11'`), `protocol` is
-/// `PROTOCOL_VERSION` as built.
+/**
+ * The shape of the runtime module (`sdk-v<X.Y>/arm64js-sdk-lib.js`) the SDK
+ * imports. `engine` is the CDN version tag (`'0.11'`), `protocol` is
+ * `PROTOCOL_VERSION` as built.
+ */
 export interface RuntimeModule {
   protocol: number;
   engine: string;
   createHost(): Host;
 }
 
-/// The frame's first message to the page that framed it, posted on load.
+/** The frame's first message to the page that framed it, posted on load. */
 export interface FrameHandshake {
   kind: typeof FRAME_MESSAGE_KIND;
   v: 1;
@@ -259,16 +274,18 @@ export interface FrameHandshake {
   engine: string;
 }
 
-/// The page's one message back: the port the RPC then runs on (transferred).
+/** The page's one message back: the port the RPC then runs on (transferred). */
 export interface FrameConnect {
   kind: typeof FRAME_MESSAGE_KIND;
   v: 1;
   op: typeof FRAME_OP_CONNECT;
 }
 
-/// The RPC over the connected port: a `Call` names a `Host` op and gets one
-/// `Reply`; `Event`s are unsolicited (output, exit, boot progress); `Ping`/
-/// `Pong` keep both ends sure the other is alive.
+/**
+ * The RPC over the connected port: a `Call` names a `Host` op and gets one
+ * `Reply`; `Event`s are unsolicited (output, exit, boot progress); `Ping`/
+ * `Pong` keep both ends sure the other is alive.
+ */
 export type RpcCall = { kind: typeof RPC_KIND; v: 1; id: number; op: string; args: unknown[] };
 export type RpcReply =
   | { kind: typeof RPC_KIND; v: 1; re: number; ok: true; value: unknown }
@@ -286,17 +303,19 @@ export type RpcEvent = {
 export type RpcPing = { kind: typeof RPC_KIND; v: 1; ping: number } | { kind: typeof RPC_KIND; v: 1; pong: number };
 export type RpcMessage = RpcCall | RpcReply | RpcEvent | RpcPing;
 
-/// Bounds on `write` and `resize`.
+/** Bounds on `write` and `resize`. */
 export const WRITE_MAX_CHARS = 64 * 1024;
 export const TERM_MAX_COLS = 1000;
 export const TERM_MAX_ROWS = 500;
 
-/// How often the client pings, and how many unanswered pings mean the frame is gone.
+/** How often the client pings, and how many unanswered pings mean the frame is gone. */
 export const RPC_PING_MS = 10_000;
 export const RPC_PING_MISSES = 2;
 
-/// The RPC op names, one per `Host` method, plus the two subscriptions carried
-/// as events. Spelled out so both sides pin the same list.
+/**
+ * The RPC op names, one per `Host` method, plus the two subscriptions carried
+ * as events. Spelled out so both sides pin the same list.
+ */
 export const RPC_OPS = [
   'boot',
   'exec',

@@ -1,6 +1,6 @@
 {
   "name": "@arm64js/protocol",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The protocol between the arm64js SDK and the arm64js engine runtime: API types, frame handshake, RPC messages and client, error codes.",
   "type": "module",
   "license": "MIT",

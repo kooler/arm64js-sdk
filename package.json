@@ -31,10 +31,10 @@
     "format:check": "prettier --check .",
     "prepack": "npm run build",
     "lint": "npm run stamp && npm run build:protocol && eslint .",
-    "prepare": "husky"
+    "prepare": "npm run stamp && npm run build:protocol && husky"
   },
   "dependencies": {
-    "@arm64js/protocol": "^1.0.0"
+    "@arm64js/protocol": "^1.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

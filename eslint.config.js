@@ -38,6 +38,8 @@ export default tseslint.config(
       // Passing on a caught value as is, whatever it was, is fine.
       '@typescript-eslint/prefer-promise-reject-errors': ['error', { allowThrowingUnknown: true }],
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      // A function that returns a Promise rejects rather than throws.
+      '@typescript-eslint/promise-function-async': 'error',
     },
   },
   {
@@ -51,4 +53,6 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.node } },
   },
   prettier,
+  // After `prettier`, which turns it off; 'all' does not fight its output.
+  { rules: { curly: ['error', 'all'] } },
 );

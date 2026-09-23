@@ -129,7 +129,7 @@ stopOutput();
 
 ### `vm.onExit(cb)` → unsubscribe
 
-The VM stopped (halted or faulted). Every later call on the VM rejects with `vm-exited`.
+The VM stopped (halted or faulted). Every later call on the VM rejects with `vm-exited`. If the hidden frame running the VM stops answering, `reason` is `'lost'` and later calls reject with `vm-lost`.
 
 If the VM has already stopped, callback is called right away. It is not called for `vm.dispose()`.
 
@@ -192,7 +192,7 @@ a.click();
 
 Mounts files in read-only mode into the VM. Files are not copied so do not consume memory. `path` is created if missing. `files` is a record of names to Blobs (`{ 'data.bin': blob }`), or a list of Files (`input.files` or `dataTransfer.files`).
 
-A path that is already mounted is refused with `invalid-input`, `unmount` it first.
+A path that is already mounted is refused with `invalid-input`: `unmount` it first, and wait for that to finish.
 
 **Mounts are not part of the VM and are not saved in snapshots.** After you boot a snapshot, mount again.
 
@@ -265,6 +265,8 @@ npm install
 npm test
 npm run build
 ```
+
+`src/version.ts` and `protocol/dist/` are generated. `npm install` creates them; run `npm run stamp` again after changing the version in `package.json`.
 
 `protocol/` is the `@arm64js/protocol` package, which the engine uses too. To change it, bump its version and publish it (tag `protocol-v<version>`), update it in the engine and release the engine, then release this package.
 

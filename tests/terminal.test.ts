@@ -15,7 +15,9 @@ class Emitter<T> {
     return { dispose: () => this.cbs.delete(cb) };
   };
   fire(v: T) {
-    for (const cb of this.cbs) cb(v);
+    for (const cb of this.cbs) {
+      cb(v);
+    }
   }
   get size() {
     return this.cbs.size;

@@ -29,7 +29,7 @@ export interface HostDeps {
  * Load `engine` inline when this page is cross-origin isolated, in a frame
  * otherwise. `onLost` fires if a frame stops answering.
  */
-export function loadHost(engine: string, deps: HostDeps, onLost: () => void): Promise<LoadedHost> {
+export async function loadHost(engine: string, deps: HostDeps, onLost: () => void): Promise<LoadedHost> {
   const isolated = deps.isolated ?? Boolean(globalThis.crossOriginIsolated);
   return isolated ? loadInlineHost(engine, deps) : loadFrameHost(engine, deps, onLost);
 }
@@ -37,7 +37,7 @@ export function loadHost(engine: string, deps: HostDeps, onLost: () => void): Pr
 async function loadInlineHost(engine: string, deps: HostDeps): Promise<LoadedHost> {
   const importer =
     deps.importRuntime ??
-    ((url: string) => import(/* @vite-ignore */ /* webpackIgnore: true */ url) as Promise<RuntimeModule>);
+    (async (url: string) => import(/* @vite-ignore */ /* webpackIgnore: true */ url) as Promise<RuntimeModule>);
   let mod: RuntimeModule;
   try {
     mod = await importer(runtimeModuleUrl(engine));
@@ -54,7 +54,7 @@ async function loadInlineHost(engine: string, deps: HostDeps): Promise<LoadedHos
 }
 
 async function loadFrameHost(engine: string, deps: HostDeps, onLost: () => void): Promise<LoadedHost> {
-  const mounter = deps.mountFrame ?? ((url: string) => mountFrameHost(url, deps.frameDeps));
+  const mounter = deps.mountFrame ?? (async (url: string) => mountFrameHost(url, deps.frameDeps));
   const frame = await mounter(frameUrl(engine));
   frame.onLost(() => {
     // The next call builds a new frame. Tear this one down first: only its

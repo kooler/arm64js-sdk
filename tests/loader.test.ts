@@ -10,7 +10,9 @@ describe('engines', () => {
   it('reads exact engine tags only', () => {
     expect(engineParts('0.11')).toEqual([0, 11]);
     expect(engineParts('12.0')).toEqual([12, 0]);
-    for (const tag of ['dev', 'v0.11', '0', '0.11.1', '', '0.x']) expect(engineParts(tag)).toBeNull();
+    for (const tag of ['dev', 'v0.11', '0', '0.11.1', '', '0.x']) {
+      expect(engineParts(tag)).toBeNull();
+    }
   });
   it('orders engines by number, not text', () => {
     expect(isNewerEngine('0.11', '0.9')).toBe(true);

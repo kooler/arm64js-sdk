@@ -48,7 +48,7 @@ export interface FrameHost {
 }
 
 /** Mount the frame for `frameUrl`, wait for its handshake, hand it a port. */
-export function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<FrameHost> {
+export async function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<FrameHost> {
   const doc = deps.document ?? document;
   const view = deps.view ?? window;
   const later = deps.setTimeout ?? ((cb, ms) => setTimeout(cb, ms));
@@ -67,14 +67,18 @@ export function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<Frame
   return new Promise<FrameHost>((resolve, reject) => {
     let settled = false;
     const finish = (err: Error | null, value?: FrameHost) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cancel(timer);
       view.removeEventListener('message', onMessage as EventListener);
       if (err) {
         iframe.remove();
         reject(err);
-      } else resolve(value!);
+      } else {
+        resolve(value!);
+      }
     };
     const timer = later(
       () =>
@@ -89,11 +93,19 @@ export function mountFrameHost(url: string, deps: FrameDeps = {}): Promise<Frame
     const onMessage = (e: MessageEvent) => {
       // Only this frame, from the origin we loaded it from, saying the one thing
       // we expect. Anything else on the page can post to this window.
-      if (e.source !== iframe.contentWindow) return;
-      if (e.origin !== origin) return;
+      if (e.source !== iframe.contentWindow) {
+        return;
+      }
+      if (e.origin !== origin) {
+        return;
+      }
       const d = e.data as Partial<FrameHandshake> | null;
-      if (!d || d.kind !== FRAME_MESSAGE_KIND || d.v !== 1 || typeof d.isolated !== 'boolean') return;
-      if (!d.isolated) return finish(new Arm64JSError('unsupported-browser', UNSUPPORTED_MESSAGE));
+      if (!d || d.kind !== FRAME_MESSAGE_KIND || d.v !== 1 || typeof d.isolated !== 'boolean') {
+        return;
+      }
+      if (!d.isolated) {
+        return finish(new Arm64JSError('unsupported-browser', UNSUPPORTED_MESSAGE));
+      }
       if (d.protocol !== PROTOCOL_VERSION) {
         return finish(
           new Arm64JSError(

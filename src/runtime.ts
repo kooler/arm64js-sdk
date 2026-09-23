@@ -1,7 +1,5 @@
-// The runtimes for this page and the VMs running on them.
-
 import { Arm64JSError, type BootOptions, type SnapshotInfo, type StorageStatus } from '@arm64js/protocol';
-import { owned } from './errors.js';
+import { withSdkErrors } from './errors.js';
 import { loadHost, type HostDeps, type HostMode, type LoadedHost } from './hosts.js';
 import { engineParts, isNewerEngine, packageEngine } from './loader.js';
 import { Vm } from './vm.js';
@@ -17,55 +15,72 @@ export interface Arm64JSDeps extends HostDeps {
  * any other a snapshot needs.
  */
 export class Runtime {
-  private readonly own: string;
+  private readonly defaultEngine: string;
   private readonly engines = new Map<string, Promise<LoadedHost>>();
   private readonly vms = new Set<Vm>();
 
   constructor(private readonly deps: Arm64JSDeps = {}) {
-    this.own = deps.engine ?? packageEngine();
+    this.defaultEngine = deps.engine ?? packageEngine();
   }
 
-  load(engine = this.own): Promise<LoadedHost> {
+  async load(engine = this.defaultEngine): Promise<LoadedHost> {
     const loading = this.engines.get(engine);
-    if (loading) return loading;
+    if (loading) {
+      return loading;
+    }
     const next: Promise<LoadedHost> = loadHost(engine, this.deps, () => this.lost(engine, next)).catch((e) => {
-      if (this.engines.get(engine) === next) this.engines.delete(engine);
+      if (this.engines.get(engine) === next) {
+        this.engines.delete(engine);
+      }
       throw e;
     });
     this.engines.set(engine, next);
     return next;
   }
 
-  /** Forget a frame that stopped answering, and the VMs that ran in it. */
+  /** Forget a frame that stopped answering, and end the VMs that ran in it. */
   private lost(engine: string, loading: Promise<LoadedHost>): void {
-    if (this.engines.get(engine) !== loading) return;
+    if (this.engines.get(engine) !== loading) {
+      return;
+    }
     this.engines.delete(engine);
-    for (const vm of this.vms) if (vm.engine === engine) this.vms.delete(vm);
+    for (const vm of this.vms) {
+      if (vm.engine === engine) {
+        this.vms.delete(vm);
+        vm.lost();
+      }
+    }
   }
 
   async boot(id: string, opts?: BootOptions): Promise<Vm> {
     if (typeof id !== 'string') {
       throw new Arm64JSError('invalid-input', 'boot takes an image name or a snapshot id');
     }
-    const own = await this.load();
-    if (!isSnapshotId(id)) return this.bootOn(own, id, opts);
+    const defaultHost = await this.load();
+    if (!isSnapshotId(id)) {
+      return this.bootOn(defaultHost, id, opts);
+    }
     // The engine the snapshot was saved on. An unreadable record is left to the
     // boot below to report.
-    const saved = (await own.host.getSnapshot(id).catch(() => null))?.engine;
-    const other = saved && saved !== own.engine && engineParts(saved) ? saved : null;
-    // An older engine may not know what a newer one saved, even in the same format.
-    if (other && isNewerEngine(other, own.engine)) return this.bootOn(await this.load(other), id, opts);
+    const saved = (await defaultHost.host.getSnapshot(id).catch(() => null))?.engine;
+    const other = saved && saved !== defaultHost.engine && engineParts(saved) ? saved : null;
+    // Saved on a newer engine: use it. Saved on an older one: try ours first.
+    if (other && isNewerEngine(other, defaultHost.engine)) {
+      return this.bootOn(await this.load(other), id, opts);
+    }
     try {
-      return await this.bootOn(own, id, opts);
+      return await this.bootOn(defaultHost, id, opts);
     } catch (e) {
       // A changed snapshot format: only the engine it was saved on can resume it.
-      if (!other || (e as Arm64JSError).code !== 'engine-mismatch') throw e;
+      if (!other || (e as Arm64JSError).code !== 'engine-mismatch') {
+        throw e;
+      }
       return this.bootOn(await this.load(other), id, opts);
     }
   }
 
   private async bootOn(loaded: LoadedHost, id: string, opts?: BootOptions): Promise<Vm> {
-    const { vmId } = await owned(loaded.host.boot(id, opts));
+    const { vmId } = await withSdkErrors(loaded.host.boot(id, opts));
     const vm = new Vm(vmId, loaded.host, loaded.engine, (v) => this.vms.delete(v));
     this.vms.add(vm);
     return vm;
@@ -80,29 +95,40 @@ export class Runtime {
   }
 
   async listSnapshots(): Promise<SnapshotInfo[]> {
-    return owned((await this.load()).host.listSnapshots());
+    return withSdkErrors((await this.load()).host.listSnapshots());
   }
 
   async getSnapshot(id: string): Promise<SnapshotInfo | null> {
-    return owned((await this.load()).host.getSnapshot(id));
+    return withSdkErrors((await this.load()).host.getSnapshot(id));
   }
 
   async removeSnapshot(id: string, opts?: { force?: boolean }): Promise<void> {
-    return owned((await this.load()).host.removeSnapshot(id, opts));
+    return withSdkErrors((await this.load()).host.removeSnapshot(id, opts));
   }
 
   async storageStatus(): Promise<StorageStatus> {
-    return owned((await this.load()).host.storageStatus());
+    return withSdkErrors((await this.load()).host.storageStatus());
   }
 
   async shutdown(): Promise<void> {
     const loads = [...this.engines];
-    if (loads.length === 0) return;
-    const loaded = await Promise.all(loads.map(([, p]) => p.catch(() => null)));
-    for (const vm of [...this.vms]) await vm.dispose().catch(() => {});
+    if (loads.length === 0) {
+      return;
+    }
+    // Wait for loads in flight, so no frame appears after shutdown.
+    const loaded = await Promise.all(loads.map(async ([, p]) => p.catch(() => null)));
+    for (const vm of [...this.vms]) {
+      await vm.dispose().catch(() => {});
+    }
     this.vms.clear();
-    for (const l of loaded) l?.dispose();
-    for (const [engine, p] of loads) if (this.engines.get(engine) === p) this.engines.delete(engine);
+    for (const l of loaded) {
+      l?.dispose();
+    }
+    for (const [engine, p] of loads) {
+      if (this.engines.get(engine) === p) {
+        this.engines.delete(engine);
+      }
+    }
   }
 }
 

@@ -23,7 +23,9 @@ export function engineParts(tag: string): [number, number] | null {
 export function isNewerEngine(a: string, b: string): boolean {
   const x = engineParts(a);
   const y = engineParts(b);
-  if (!x || !y) return false;
+  if (!x || !y) {
+    return false;
+  }
   return x[0] !== y[0] ? x[0] > y[0] : x[1] > y[1];
 }
 

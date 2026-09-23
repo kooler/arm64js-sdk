@@ -15,23 +15,23 @@ export function createArm64JS(deps: Arm64JSDeps = {}) {
   return {
     /** Boot a CDN image (`'alpine'`, `'alpine:2'`) or one of this browser's snapshots by id.
      *  A snapshot boots on the engine it was saved on when this page's own cannot resume it. */
-    boot: (target: string, opts?: BootOptions) => rt.boot(target, opts),
+    boot: async (target: string, opts?: BootOptions) => rt.boot(target, opts),
     /** `'inline'` when the VM runs in this page, `'frame'` when in the CDN's frame. */
-    mode: () => rt.mode(),
+    mode: async () => rt.mode(),
     /** This page's engine, e.g. `'0.11'`. A VM booted from a snapshot may run on
      *  another: see `vm.engine`. */
-    engine: () => rt.engine(),
+    engine: async () => rt.engine(),
     snapshots: {
-      list: () => rt.listSnapshots(),
-      get: (id: string) => rt.getSnapshot(id),
+      list: async () => rt.listSnapshots(),
+      get: async (id: string) => rt.getSnapshot(id),
       /** Delete a snapshot. Refused while a VM runs from it, unless `force`. */
-      remove: (id: string, opts?: { force?: boolean }) => rt.removeSnapshot(id, opts),
+      remove: async (id: string, opts?: { force?: boolean }) => rt.removeSnapshot(id, opts),
     },
     storage: {
-      status: () => rt.storageStatus(),
+      status: async () => rt.storageStatus(),
     },
     /** Dispose every VM and, in frame mode, the frame. */
-    shutdown: () => rt.shutdown(),
+    shutdown: async () => rt.shutdown(),
     version: VERSION,
   };
 }
