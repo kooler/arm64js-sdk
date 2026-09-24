@@ -1,5 +1,8 @@
 # ARM64JS SDK
 
+[![npm](https://img.shields.io/npm/v/arm64js)](https://www.npmjs.com/package/arm64js)
+[![CI](https://github.com/kooler/arm64js-sdk/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kooler/arm64js-sdk/actions/workflows/ci.yml)
+
 Arm64js is a WebAssembly-based arm64 emulator running in a web browser and allowing you to boot and control a real Linux (Alpine).
 
 This SDK helps to: create a VM, set it up and interact with it.
