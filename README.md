@@ -1,19 +1,25 @@
 # ARM64JS SDK
 
-arm64js is a WebAssembly-based arm64 emulator running in a web browser and allowing you to boot and control a real Linux (Alpine).
+Arm64js is a WebAssembly-based arm64 emulator running in a web browser and allowing you to boot and control a real Linux (Alpine).
 
-This SDK helps to: create a VM, set it up and interact with it. The SDK is distributed as an npm package and integrated with the arm64js CDN.
+This SDK helps to: create a VM, set it up and interact with it.
+
+The SDK is distributed as an npm package and integrated with the arm64js CDN.
 
 ## VM creation lifecycle
 
-1. _Boot a base image._ Similarly to Docker, you need to select a base image to boot the initial state of your VM. At the moment, only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in a web browser. The list of images and their versions is at [arm64js.com/images](https://arm64js.com/images/). Booting the image creates a VM instance:
+### Boot a base image
+
+Similarly to Docker, you need to select a base image to boot the initial state of your VM. At the moment, only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in a web browser. The list of images and their versions is at [arm64js.com/images](https://arm64js.com/images/). Booting the image creates a VM instance:
 
 ```js
 import { Arm64JS } from 'arm64js';
 const vm = await Arm64JS.boot('alpine');
 ```
 
-2. _Set up the VM._ You would likely want to install some extra packages or copy files into your VM so that it can do something useful. For managing packages, use `apk` as you would in the native Alpine. To execute a command (any command pretty much), the `vm.exec` method is used:
+### Set up the VM
+
+You would likely want to install some extra packages or copy files into your VM so that it can do something useful. For managing packages, use `apk` as you would in the native Alpine. To execute a command (any command pretty much), the `vm.exec` method is used:
 
 ```js
 const { output, exitCode } = await vm.exec('apk add --no-cache curl');
@@ -39,7 +45,9 @@ To read any file from the VM, use `readFile`:
 const result = await vm.readFile('/root/result.txt'); // a copy out, as a Blob
 ```
 
-3. _Make a snapshot and save it locally._ Once you are done with the VM setup, you would likely want to save it so that you don't need to do the same setup again. For that, make a snapshot of the VM. Snapshots are stored in the [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system).
+### Make a snapshot and save it locally
+
+Once you are done with the VM setup, you would likely want to save it so that you don't need to do the same setup again. For that, make a snapshot of the VM. Snapshots are stored in the [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system).
 
 ```js
 const snap = await vm.snapshot({ name: 'alpine with curl' });
@@ -54,21 +62,21 @@ const again = await Arm64JS.boot(snap.id);
 
 ## Where the VM runs
 
-The VM needs `SharedArrayBuffer` which browsers only give to cross-origin-isolated pages. If the `Cross-Origin-Opener-Policy` (COOP) header is not specified or not sufficient, the SDK will load the VM inside an iframe on the cdn.arm64js.com domain.
+The VM needs `SharedArrayBuffer` which browsers only give to cross-origin-isolated pages. If the `Cross-Origin-Opener-Policy` (COOP) header is not specified or not sufficient, the SDK will load the VM inside an iframe on the `cdn.arm64js.com` domain.
 
 The following decision process is being used:
 
-| Your page                                                                                        | What happens                                                                                       |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` | the VM runs **inline**, in your page's own workers. Works in all modern browsers.                  |
-| sends no COOP headers (likely)                                                                   | the VM runs in a hidden **frame** served from the arm64js CDN. Works only in Chrome and Edge 137+. |
-| no COOP header and a browser that doesn't support the iframe fallback (Firefox, Safari)          | `boot()` rejects with `unsupported-browser`.                                                       |
+| Your page                                                                                        | What happens                                                                                  |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` | the VM runs **inline**, in your page's own workers. Works in all modern browsers.             |
+| sends no COOP headers (likely)                                                                   | the VM runs in a hidden **frame** served from the arm64js CDN. Works in Chrome and Edge 137+. |
+| no COOP header and a browser that doesn't support the iframe fallback (Firefox, Safari)          | `boot()` rejects with `unsupported-browser`.                                                  |
 
-Call `Arm64JS.mode()` to see which mode is being used. The API is the same in both.
+Call `Arm64JS.mode()` to see which mode is being used.
 
 ### Setting the headers
 
-To run the VM inline, send these two headers with the HTML of the page that runs the VM:
+To run the VM inline, send these two headers with the page that runs the VM:
 
 ```
 Cross-Origin-Opener-Policy: same-origin
@@ -77,8 +85,8 @@ Cross-Origin-Embedder-Policy: require-corp
 
 We recommend setting them only on the pages that run the VM, not on the whole site, because they change how the browser treats a page:
 
-- files from other domains (scripts, images, fonts, iframes) load only if their server allows it with a `Cross-Origin-Resource-Policy` or CORS header. The arm64js CDN already does.
-- popups the page opens lose their link to it, which can break sign-in or payment popups.
+- files from other domains (scripts, images, fonts, iframes) load only if their server allows it with a `Cross-Origin-Resource-Policy` or CORS header (arm64js CDN already does).
+- popups the page opens lose their link to it, which can break for example sign-in or payment popups.
 
 Here's an example of how to send them with nginx:
 
@@ -89,7 +97,7 @@ location = /playground.html {
 }
 ```
 
-To check the setup, run `await Arm64JS.mode()`; it should return `'inline'`.
+To check the setup, run `await Arm64JS.mode()`, it should return `'inline'`.
 
 ### Content-Security-Policy
 
