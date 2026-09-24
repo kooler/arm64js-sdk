@@ -8,7 +8,7 @@ The SDK is distributed as an npm package and integrated with the arm64js CDN.
 
 ## VM creation lifecycle
 
-### Boot a base image
+### 1. Boot a base image
 
 Similarly to Docker, you need to select a base image to boot the initial state of your VM. At the moment, only base images provided by arm64js can be used as they require some customization to work "quicker" when emulated in a web browser. The list of images and their versions is at [arm64js.com/images](https://arm64js.com/images/). Booting the image creates a VM instance:
 
@@ -17,7 +17,7 @@ import { Arm64JS } from 'arm64js';
 const vm = await Arm64JS.boot('alpine');
 ```
 
-### Set up the VM
+### 2. Set up the VM
 
 You would likely want to install some extra packages or copy files into your VM so that it can do something useful. For managing packages, use `apk` as you would in the native Alpine. To execute a command (any command pretty much), the `vm.exec` method is used:
 
@@ -45,7 +45,7 @@ To read any file from the VM, use `readFile`:
 const result = await vm.readFile('/root/result.txt'); // a copy out, as a Blob
 ```
 
-### Make a snapshot and save it locally
+### 3. Make a snapshot and save it locally
 
 Once you are done with the VM setup, you would likely want to save it so that you don't need to do the same setup again. For that, make a snapshot of the VM. Snapshots are stored in the [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system).
 
