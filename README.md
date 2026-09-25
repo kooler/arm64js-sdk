@@ -177,6 +177,24 @@ It works by typing the command into the guest's serial console and reading the b
 
 Whatever the command does runs as **root** in the guest.
 
+#### Streaming the output
+
+For longer running commands it can be useful to see output as it's being generated rather waiting for command to finish. To do that you can setup `vm.onOutput` **before** running `vm.exec`:
+
+```ts
+const decoder = new TextDecoder();
+const stop = vm.onOutput((bytes, info) => {
+  if (!info.exec) return; // keep only what exec prints
+  console.log(decoder.decode(bytes));
+});
+
+try {
+  const { exitCode } = await vm.exec('apk add --no-cache php');
+} finally {
+  stop();
+}
+```
+
 ### `vm.write(data)`
 
 Send data directly into the VM console, lower level than `vm.exec`, allows sending any keyboard sequences including key presses like Ctrl-C ('\x03') or Enter ('\r').
@@ -237,6 +255,18 @@ Undoes a `mount`. If nothing is mounted at `path` it does nothing. While a progr
 ### `vm.snapshot({ name?, meta? })` → `SnapshotInfo`
 
 Saves the VM in browser storage (OPFS) and keeps it running. Use `meta` to store any extra info you'd like to add to the snapshot (any JSON up to 16 KiB); it is returned in `snapshots.list()`.
+
+For example to save current state and load it when page refreshes:
+
+```ts
+// load from snapshot if previously saved or alpine otherwise
+const snapshotId = localStorage.get('snapshotId');
+await Arm64JS.boot(snapshotId ? snapshotId : 'alpine');
+
+// do something to the VM, then save the snapshot again
+const newSnapshot = vm.snapshot();
+localStorage.set('snapshotId', newSnapshot.id);
+```
 
 ### `vm.dispose()`
 

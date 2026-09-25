@@ -51,8 +51,9 @@ export class Vm {
     return withSdkErrors(this.host.exec(this.id, command, opts));
   }
 
-  /** The raw bytes the guest prints on its console. `info.exec` marks what an
-   *  `exec` printed (its command, output and prompts). Returns the unsubscribe. */
+  /** The raw bytes the guest prints on its console. While an `exec` runs, only
+   *  what its command prints comes through, marked `info.exec`. Returns the
+   *  unsubscribe. */
   onOutput(cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void {
     this.check();
     return this.host.onOutput(this.id, cb);

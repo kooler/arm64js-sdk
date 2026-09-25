@@ -221,9 +221,9 @@ export interface Host {
   /** Run a shell command (one or more lines) in the guest and report its exit
    *  status. One at a time per VM. */
   exec(vmId: string, command: string, opts?: ExecOptions): Promise<ExecResult>;
-  /** Observe the raw console bytes the guest prints. `info.exec` marks bytes
-   *  printed by an `exec` (its command, its output, the prompts around it), which
-   *  a terminal hides. Returns the unsubscribe. */
+  /** Observe the raw console bytes the guest prints. While an `exec` runs, only
+   *  what its command prints is handed on, marked `info.exec`, which a terminal
+   *  hides. Returns the unsubscribe. */
   onOutput(vmId: string, cb: (bytes: Uint8Array, info: OutputInfo) => void): () => void;
   /** Type into the guest's console, as a person at a terminal would. Held
    *  while an `exec` or a `snapshot` runs, and sent after it. */
