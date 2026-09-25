@@ -268,6 +268,15 @@ const newSnapshot = vm.snapshot();
 localStorage.set('snapshotId', newSnapshot.id);
 ```
 
+Creating snapshot for a larger VM may take some time, you can track progress using the `onProgress` callback:
+
+```ts
+const snapshot = await vm.snapshot({
+  name: 'my snapshot',
+  onProgress: (done, total) => console.log(`${Math.round((done / total) * 100)}%`),
+});
+```
+
 ### `vm.dispose()`
 
 Stops the VM and frees its workers.
