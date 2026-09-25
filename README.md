@@ -121,7 +121,20 @@ A VM can be created either from a base image or your own local snapshot.
 - `image`: name of an image on the CDN ([all images](https://arm64js.com/images/)): `'alpine'` is the newest version of it, `'alpine:2'` a fixed one, `'alpine@sha256:<hash>'` an exact snapshot.
 - `snapshotId`: a snapshot id (`snap.id`, 64 hex characters) loads one of your own snapshots made previously.
 
-Additionally, you can specify an `onProgress` callback to track VM loading phases (`resolve → manifest → start → memory (repeats, with counts) → run → done`) and the number of virtual CPUs the VM will have (more is not always better).
+Additionally, you can specify an `onProgress` callback to track VM loading phases and the number of virtual CPUs the VM will have (more is not always better).
+
+onProgress gets one argument, a BootProgress object:
+
+```ts
+interface BootProgress {
+  stage: 'resolve' | 'manifest' | 'start' | 'memory' | 'run' | 'done';
+  done?: number;
+  total?: number;
+}
+```
+
+- the stages arrive in the following order: resolve → manifest → start → memory → run → done.
+- done and total are optional, they are filled in during the `memory` stage when the VM data chunks load (the slowers part of the boot for larger VMs).
 
 ### Listener: `vm.onOutput(cb)` → unsubscribe
 
@@ -182,6 +195,16 @@ Copies `data` (a `Blob` or `File`, bytes, or a string) into the VM as the file `
 - `timeoutMs` will terminate the operation if it doesn't complete within the specified time (for example, if the VM is very busy). Default is two minutes plus one second per MiB.
 
 The copy is kept in VM memory, so it has to fit there (`alpine` for example has 1 GiB). If you need to use a larger file, use `vm.mount` instead.
+
+Here's an example how you can load a file from the URL in to the VM:
+
+```ts
+const file = await fetch('./test.txt');
+const fileBlob = await file.blob();
+await vm.writeFile('/tmp/test.txt', fileBlob);
+const { output, exitCode } = await vm.exec('cat /tmp/test.txt');
+console.log(output);
+```
 
 **Files become part of the VM, so when a snapshot is taken those files will be present in the snapshot.**
 
