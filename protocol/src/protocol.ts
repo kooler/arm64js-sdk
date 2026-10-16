@@ -58,7 +58,8 @@ export type Arm64JSErrorCode =
   | 'mount-failed'
   | 'unmount-failed'
   | 'write-failed'
-  | 'read-failed';
+  | 'read-failed'
+  | 'listen-failed';
 
 /** The error every SDK-facing failure is reported as. */
 export class Arm64JSError extends Error {
@@ -251,7 +252,45 @@ export interface Host {
   /** Delete a snapshot; refused while a VM runs from it unless `force`. */
   removeSnapshot(id: string, opts?: { force?: boolean }): Promise<void>;
   storageStatus(): Promise<StorageStatus>;
+  /** Take guest connections to `host.internal:<port>`. Resolves with the listener
+   *  port, which gets one `HostConnect` per connection. Absent before protocol 1.2. */
+  listen?(vmId: string, port: number): Promise<MessagePort>;
+  /** Stop taking new connections on `port`. Open connections keep going. */
+  unlisten?(vmId: string, port: number): Promise<void>;
 }
+
+// --- host ports --------------------------------------------------------------
+//
+// Each guest connection to `host.internal` is its own `MessagePort` between the
+// engine's network worker and the page, outside the RPC.
+
+/** The name the guest dials to reach the page. */
+export const HOST_INTERNAL_NAME = 'host.internal';
+
+/** Bytes a side may send on a connection before the other acknowledges them. */
+export const HOST_CONN_WINDOW = 1024 * 1024;
+
+/** The largest `data` message. */
+export const HOST_CONN_CHUNK = 64 * 1024;
+
+/** On a listener port (engine → page): a new guest connection to `port`. */
+export interface HostConnect {
+  type: 'connect';
+  port: number;
+  conn: MessagePort;
+}
+
+/** What arrives on a listener port. `closed` follows `unlisten`, after the last
+ *  connection. */
+export type HostListenerMessage = HostConnect | { type: 'closed' };
+
+/**
+ * On a connection port, both ways. The receiver `ack`s bytes once used; a sender
+ * keeps at most `HOST_CONN_WINDOW` unacknowledged. `end` is a half close, `close`
+ * ends both ways.
+ */
+export type HostConnMessage =
+  { type: 'data'; data: Uint8Array } | { type: 'ack'; bytes: number } | { type: 'end' } | { type: 'close' };
 
 /**
  * The shape of the runtime module (`sdk-v<X.Y>/arm64js-sdk-lib.js`) the SDK
@@ -333,5 +372,7 @@ export const RPC_OPS = [
   'unmount',
   'writeFile',
   'readFile',
+  'listen',
+  'unlisten',
 ] as const;
 export const RPC_EVENTS = ['progress', 'output', 'exit', 'lost'] as const;

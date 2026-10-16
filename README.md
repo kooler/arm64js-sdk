@@ -277,6 +277,67 @@ const snapshot = await vm.snapshot({
 });
 ```
 
+### `vm.listen(port, onConnection)` → `{ port, close() }`
+
+Creates a TCP server emulation on the webpage side "listening" to a specific port where VM can connect to. The application from inside the VM can open a TCP connection to `host.internal:<port>` and talk to it as it would to a normal TCP server.
+
+Until the page "listens" on a port, connections to it are refused.
+
+```js
+const listener = await vm.listen(9000, async (conn) => {
+  for await (const chunk of conn) {
+    // chunk is a Uint8Array with the bytes the program sent
+    await conn.write(chunk); // send bytes (or a string) back
+  }
+  await conn.end(); // no more data from the page
+});
+
+await vm.exec('echo hello | nc host.internal 9000');
+
+// to stop taking new connections (open ones keep going):
+await listener.close();
+```
+
+`onConnection` is a callback that returns the TCP `Connection`.
+
+A `Connection` has:
+
+- `readable` and `writable`: standard web streams of `Uint8Array`. The connection itself is also async-iterable.
+- `write(data)`: sends bytes or a string. It resolves once the data fits in the 1 MiB send window, so awaiting each write keeps memory bounded.
+- `end()`: tells the VM "the page has nothing more to send" without cutting off what the VM sends back. In TCP terms it is a half close, the same as shutdown(SHUT_WR).
+- `close()`: ends the connection both ways. What the page already wrote still reaches the VM, then it reads end-of-file. Anything the VM sends after that is dropped. `closed` is a promise that resolves when the connection is over.
+
+Both directions have flow control: if the page reads slowly, the VM's writes slow down, and the other way around.
+
+Listeners and connections end when the VM stops or is disposed. They are not part of snapshots: after booting one, call `listen` again.
+
+### `vm.serveHttp(port, handler, { maxBodyBytes? })` → `{ port, close() }`
+
+An HTTP server on top of `vm.listen`. Each request from the VM becomes a standard `Request`, and the `Response` your handler returns goes back. A response body is streamed as it is produced, so server-sent events work. Each connection carries one request.
+
+For example, a page that tells the VM the time and echoes what it posts:
+
+```js
+await vm.serveHttp(8080, async (req) => {
+  if (req.method === 'POST') {
+    return new Response(`you sent: ${await req.text()}\n`);
+  }
+  return new Response(`${new Date().toISOString()}\n`);
+});
+
+await vm.exec('wget -qO- http://host.internal:8080/');
+// → { output: '2026-10-16T19:03:11.123Z', exitCode: 0, … }
+
+await vm.exec("wget -qO- --post-data='hello' http://host.internal:8080/");
+// → { output: 'you sent: hello', exitCode: 0, … }
+```
+
+Some details:
+
+- The request body is read in full before the handler runs. Bodies over `maxBodyBytes` (default 64 MiB) get a 413 without being read.
+- `request.url` is always `http://host.internal:<port>/<path>`. What the VM puts in the `Host` header is in `request.headers`. It does not change the URL, so passing the request on with `fetch(request)` cannot be pointed somewhere else by the VM.
+- A response without `Content-Length` is sent chunked, so a body that fails halfway reaches the VM as an incomplete response rather than a short one. If the VM disconnects, the response body is cancelled, so whatever produces it can stop.
+
 ### `vm.dispose()`
 
 Stops the VM and frees its workers.
@@ -307,7 +368,7 @@ Disposes every VM and, in frame mode, the frames.
 
 ### Errors
 
-Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `protocol-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `unmount-failed`, `write-failed`, `read-failed`.
+Everything rejects with an `Arm64JSError` carrying a `code`: `unsupported-browser`, `protocol-mismatch`, `engine-mismatch`, `image-not-found`, `boot-failed`, `exec-timeout`, `exec-failed`, `vm-exited`, `vm-lost`, `storage-unavailable`, `quota`, `snapshot-failed`, `snapshot-not-found`, `snapshot-in-use`, `snapshot-corrupt`, `invalid-input`, `share-unavailable`, `mount-failed`, `unmount-failed`, `write-failed`, `read-failed`, `listen-failed`.
 
 ## Terminal (optional)
 
@@ -330,6 +391,8 @@ It shows the VM console, sends what is typed to the VM, and sizes itself to the 
 ## Networking
 
 The VM has an emulated network card, DNS, and can install Alpine packages with `apk` through the CDN's package mirror. It has no general internet access.
+
+The name `host.internal` is the page itself: see `vm.listen` and `vm.serveHttp`.
 
 ## Development
 

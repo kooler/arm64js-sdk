@@ -28,7 +28,7 @@ import {
 
 /** The port shape both ends use (a `MessagePort`, or a double in tests). */
 export interface PortLike {
-  postMessage(message: unknown): void;
+  postMessage(message: unknown, transfer?: Transferable[]): void;
   addEventListener(type: 'message', cb: (ev: { data: unknown }) => void): void;
   removeEventListener(type: 'message', cb: (ev: { data: unknown }) => void): void;
   start?(): void;
@@ -283,5 +283,13 @@ export class RpcClient implements Host {
 
   async storageStatus() {
     return this.call<Awaited<ReturnType<Host['storageStatus']>>>('storageStatus', []);
+  }
+
+  async listen(vmId: string, port: number): Promise<MessagePort> {
+    return this.call<MessagePort>('listen', [vmId, port]);
+  }
+
+  async unlisten(vmId: string, port: number): Promise<void> {
+    return this.call<void>('unlisten', [vmId, port]);
   }
 }
