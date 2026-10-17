@@ -1,6 +1,7 @@
 // A guest connection to `host.internal` as a byte stream. Writes wait while
 // `HOST_CONN_WINDOW` bytes are unacknowledged; guest bytes are acknowledged only
-// when read, so a slow page slows the guest.
+// when read, so a slow page slows the guest. The page's side ends by itself once
+// the page has read to the guest's end, as a Node socket's does.
 
 import { Arm64JSError, HOST_CONN_CHUNK, HOST_CONN_WINDOW, type HostConnMessage } from '@arm64js/protocol';
 
@@ -51,6 +52,10 @@ export class Connection implements AsyncIterable<Uint8Array> {
             }
             if (this.remoteEnded || this.isClosed) {
               controller.close();
+              // The guest has ended and the page has seen it: end the page's side
+              // too, after the writes already made. A page that forgot `end()`
+              // would otherwise keep the connection, and its buffers in the VM.
+              void this.end();
               return;
             }
             await this.waitForChange();

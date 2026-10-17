@@ -140,15 +140,38 @@ describe('vm.listen', () => {
     expect(conns).toHaveLength(1);
     const conn = conns[0];
     expect(conn.localPort).toBe(8080);
-    const got: string[] = [];
     for await (const chunk of conn) {
-      got.push(new TextDecoder().decode(chunk));
+      await conn.write(new TextDecoder().decode(chunk).replace('i', 'o'));
     }
-    expect(got.join('')).toBe('ping');
-    await conn.write('pong');
-    await conn.end();
     await guest.until(() => guest.ended);
     expect(guest.text()).toBe('pong');
+  });
+
+  it('ends the page side by itself once the page has read to the guest end', async () => {
+    const { conns, engineEnds } = await vmWithListener();
+    const guest = dial(engineEnds, 8080, false);
+    const order: string[] = [];
+    guest.port.addEventListener('message', (ev: MessageEvent<HostConnMessage>) => {
+      if (ev.data.type !== 'ack') {
+        order.push(ev.data.type);
+      }
+    });
+    guest.send('request');
+    guest.end();
+    await tick();
+    const conn = conns[0];
+    const reader = conn.readable.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('request');
+    void conn.write('answer');
+    await tick();
+    // Not before the page has seen the end: it may still answer.
+    expect(guest.ended).toBe(false);
+    expect((await reader.read()).done).toBe(true);
+    await guest.until(() => guest.ended);
+    // The answer already written goes out first.
+    expect(order).toEqual(['data', 'end']);
+    expect(guest.text()).toBe('answer');
+    await expect(conn.write('late')).rejects.toMatchObject({ code: 'invalid-input' });
   });
 
   it('keeps the connection open when a for-await loop is left early', async () => {
@@ -535,6 +558,18 @@ describe('vm.serveHttp', () => {
     await request(engineEnds, 'GET https://bank.example/admin?x=1 HTTP/1.1\r\nHost: bank.example\r\n\r\n');
     await request(engineEnds, 'GET /p HTTP/1.1\r\nHost: evil.example\r\n\r\n');
     expect(seen).toEqual(['http://host.internal:8080/admin?x=1', 'http://host.internal:8080/p']);
+  });
+
+  it('answers a guest that closed its side right after the request', async () => {
+    const { engineEnds } = await server(async () => {
+      await tick();
+      return new Response('late answer');
+    });
+    const guest = dial(engineEnds, 8080);
+    guest.send('GET / HTTP/1.0\r\n\r\n');
+    guest.end();
+    await guest.until(() => guest.ended);
+    expect(guest.text().endsWith('\r\n\r\nlate answer')).toBe(true);
   });
 
   it('answers HTTP/1.0 without chunked encoding', async () => {
