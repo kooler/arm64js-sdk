@@ -30,7 +30,7 @@ const { output, exitCode } = await vm.exec('apk add --no-cache curl');
 
 It returns raw `output` and `exitCode` so that you can verify the result.
 
-The VM _does not_ have access to the Internet except for the apk registry. To give it your own data, you can use one of the two options:
+The VM _does not_ have access to the Internet except for the apk registry, unless you run an internet gateway for it (see [Networking](#networking)). To give it your own data, you can use one of the two options:
 
 - `vm.writeFile`: copies the specified file into the VM. Changing or deleting the file happens only inside the VM. The file is saved and loaded with the snapshot. Uses VM memory to copy the file, thus is intended mainly for smaller (up to 100 MiB) files.
 - `vm.mount`: read-only, direct mount of the data blob. Doesn't use any VM memory. Not stored in the snapshot. To unmount use `vm.unmount()`.
@@ -114,7 +114,7 @@ npm install arm64js
 
 ## API
 
-### `Arm64JS.boot(image | snapshotId, { vcpus?, onProgress? })` → `Vm`
+### `Arm64JS.boot(image | snapshotId, { vcpus?, gateway?, onProgress? })` → `Vm`
 
 A VM can be created either from a base image or your own local snapshot.
 
@@ -122,6 +122,8 @@ A VM can be created either from a base image or your own local snapshot.
 - `snapshotId`: a snapshot id (`snap.id`, 64 hex characters) loads one of your own snapshots made previously.
 
 Additionally, you can specify an `onProgress` callback to track VM loading phases and the number of virtual CPUs the VM will have (more is not always better).
+
+`gateway: { url, token? }` sends the VM's internet traffic through a gateway you run, see [Internet gateway](#internet-gateway).
 
 onProgress gets one argument, a BootProgress object:
 
@@ -390,9 +392,35 @@ It shows the VM console, sends what is typed to the VM, and sizes itself to the 
 
 ## Networking
 
-The VM has an emulated network card, DNS, and can install Alpine packages with `apk` through the CDN's package mirror. It has no general internet access.
+The VM has an emulated network card, DNS, and can install Alpine packages with `apk` through the CDN's package mirror. It has no general internet access unless you give it a gateway.
 
 The name `host.internal` is the page itself: see `vm.listen` and `vm.serveHttp`.
+
+### Internet gateway
+
+A browser cannot open TCP connections, so a VM reaches the internet through a gateway: a small program that takes the VM's connections over a WebSocket and opens them from the machine it runs on. Download `arm64js-gateway` for Linux or macOS from [arm64js.com](https://arm64js.com/#internet-gateway), start it, and pass its address when booting:
+
+```sh
+./arm64js-gateway --ws 127.0.0.1:4434
+```
+
+```js
+const vm = await Arm64JS.boot('alpine', { gateway: { url: 'ws://127.0.0.1:4434' } });
+await vm.exec('wget -qO- https://example.com');
+```
+
+By default the gateway relays every connection from any page that reaches it, to any address, including the machine it runs on and its local network. To narrow that down:
+
+- `--allow-host registry.npmjs.org` (repeatable, `*.npmjs.org` for a whole domain) relays only TCP connections to those names. A name that resolves to a private or local address is still refused; give the IP itself to allow an address. UDP and ping are then not relayed. Names that share an address with an allowed name on a large CDN can still be reached, because the gateway sees addresses, not the site inside the encrypted connection.
+- `--allow-origin https://app.example.com` (repeatable) serves only web pages from that origin. It does not stop other programs, which can send any origin, so a gateway other machines can reach needs `--token`. In frame mode the VM runs in the CDN's frame, so the origin the gateway sees is `https://cdn.arm64js.com`: use `--token` instead.
+- `--token <secret>` serves only clients that pass the same `token` in the boot option: `{ gateway: { url, token } }`. Anyone who can read your page can read the token too. A client the gateway refuses gets no connection at all, so the VM boots without internet access.
+
+Things to know:
+
+- Chrome asks the user to allow access to apps on their device the first time a page on another site connects to a gateway on `127.0.0.1`. A page served from `localhost` is not asked.
+- A gateway on another machine needs `wss://`: browsers block a plain `ws://` connection from an `https` page to anything but the local machine. Put it behind a TLS proxy such as Caddy.
+- DNS does not go through the gateway: it is resolved over HTTPS by the browser (Cloudflare's resolver). `apk` packages come from the CDN's mirror and use the gateway only when that download fails.
+- Needs engine 0.9 or newer. A snapshot saved on an older engine resumes on that engine, and booting it with `gateway` fails with `engine-mismatch` rather than starting a VM without internet access.
 
 ## Development
 

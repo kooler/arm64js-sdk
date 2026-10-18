@@ -76,6 +76,13 @@ describe('mountFrameHost', () => {
     expect(page.iframe.src).toBe(URL_);
     expect(page.iframe.style.cssText).toMatch(/width:1px;height:1px/);
     expect(page.iframe.style.cssText).not.toMatch(/display:none/);
+    // The frame may ask the user for local network access (a gateway on
+    // 127.0.0.1); Chrome lets a cross-origin frame ask only when this is set.
+    expect(page.iframe.attrs.allow?.split(/;\s*/)).toEqual([
+      'local-network-access',
+      'local-network',
+      'loopback-network',
+    ]);
     // Wrong window, wrong origin, wrong shape: all ignored.
     page.emit(hello(), { source: {} });
     page.emit(hello(), { origin: 'https://evil.example' });

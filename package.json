@@ -34,7 +34,7 @@
     "prepare": "npm run stamp && npm run build:protocol && husky"
   },
   "dependencies": {
-    "@arm64js/protocol": "^1.2.0"
+    "@arm64js/protocol": "^1.3.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

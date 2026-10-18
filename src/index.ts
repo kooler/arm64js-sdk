@@ -13,6 +13,7 @@ export type {
   BootProgress,
   ExecOptions,
   ExecResult,
+  GatewayOptions,
   OutputInfo,
   ReadFileOptions,
   SnapshotInfo,

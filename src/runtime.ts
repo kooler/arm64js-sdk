@@ -1,7 +1,7 @@
 import { Arm64JSError, type BootOptions, type SnapshotInfo, type StorageStatus } from '@arm64js/protocol';
 import { withSdkErrors } from './errors.js';
 import { loadHost, type HostDeps, type HostMode, type LoadedHost } from './hosts.js';
-import { engineParts, isNewerEngine, packageEngine } from './loader.js';
+import { engineParts, GATEWAY_MIN_ENGINE, isNewerEngine, packageEngine, predatesGateway } from './loader.js';
 import { Vm } from './vm.js';
 
 /** Seams for tests; a page never passes these. */
@@ -80,6 +80,15 @@ export class Runtime {
   }
 
   private async bootOn(loaded: LoadedHost, id: string, opts?: BootOptions): Promise<Vm> {
+    // An older runtime drops the option it does not know, and the VM would boot
+    // with no internet and no error. A snapshot saved on an older engine resumes
+    // on that engine, so this can happen with a current SDK too.
+    if (opts?.gateway !== undefined && predatesGateway(loaded.engine)) {
+      throw new Arm64JSError(
+        'engine-mismatch',
+        `the gateway option needs engine ${GATEWAY_MIN_ENGINE} or newer; this VM runs on ${loaded.engine}`,
+      );
+    }
     const { vmId } = await withSdkErrors(loaded.host.boot(id, opts));
     const vm = new Vm(vmId, loaded.host, loaded.engine, (v) => this.vms.delete(v));
     this.vms.add(vm);

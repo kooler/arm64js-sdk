@@ -114,9 +114,27 @@ export interface BootProgress {
   total?: number;
 }
 
+/**
+ * An internet gateway the VM sends its traffic through: the `arm64js-gateway`
+ * binary, run by whoever owns the page (https://arm64js.com/#internet-gateway).
+ */
+export interface GatewayOptions {
+  /** `ws://127.0.0.1:4434` for a gateway on the user's machine, `wss://…` for one elsewhere. */
+  url: string;
+  /** The gateway's `--token`, if it was started with one. */
+  token?: string;
+}
+
 export interface BootOptions {
   /** Guest CPUs the image build must have (default: any; the newest compatible build wins). */
   vcpus?: number;
+  /**
+   * Reach the internet through this gateway. Without it the VM reaches only the
+   * Alpine package mirror (`apk`) and DNS; every other connection is refused.
+   * Needs engine 0.9 or newer; on an older one (a snapshot saved there) the
+   * boot fails with `engine-mismatch`.
+   */
+  gateway?: GatewayOptions;
   onProgress?: (p: BootProgress) => void;
 }
 

@@ -168,6 +168,40 @@ describe('Arm64JS', () => {
     expect((await sdk.storage.status()).available).toBe(true);
   });
 
+  it('refuses the gateway option on an engine that would drop it', async () => {
+    const id = (c: string) => c.repeat(64);
+    // `a` resumes only on 0.8 (a changed format), which predates the option.
+    const saved: Record<string, string> = { [id('a')]: '0.8' };
+    const hosts = new Map<string, ReturnType<typeof fakeHost>>();
+    const sdk = createArm64JS({
+      isolated: true,
+      engine: '0.9',
+      importRuntime: async (url) => {
+        const engine = engineOf(url);
+        const host = fakeHost();
+        const boot = host.boot.bind(host);
+        host.boot = async (target, opts) => {
+          if (engine === '0.9' && target === id('a')) {
+            throw new Arm64JSError('engine-mismatch', 'another format');
+          }
+          return boot(target, opts);
+        };
+        host.getSnapshot = async (sid) => (saved[sid] ? savedOn(sid, saved[sid]) : null);
+        hosts.set(engine, host);
+        return { protocol: PROTOCOL_VERSION, engine, createHost: () => host };
+      },
+    });
+    const gateway = { url: 'ws://127.0.0.1:4434' };
+    // On this page's engine the option goes through to the runtime.
+    await sdk.boot('alpine', { gateway });
+    expect(hosts.get('0.9')!.calls).toContainEqual(['boot', 'alpine', { gateway }]);
+    // On the older engine a snapshot needs, it fails instead of booting offline.
+    await expect(sdk.boot(id('a'), { gateway })).rejects.toMatchObject({ code: 'engine-mismatch' });
+    expect(hosts.get('0.8')!.calls.some((c) => c[0] === 'boot')).toBe(false);
+    // Without the option that engine still boots it.
+    expect((await sdk.boot(id('a'))).engine).toBe('0.8');
+  });
+
   it("boots a snapshot on the engine it was saved on when this page's cannot", async () => {
     const id = (c: string) => c.repeat(64);
     const saved: Record<string, string> = { [id('a')]: '0.4', [id('b')]: '0.4', [id('c')]: '0.6', [id('d')]: 'dev' };

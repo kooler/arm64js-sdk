@@ -29,6 +29,17 @@ export function isNewerEngine(a: string, b: string): boolean {
   return x[0] !== y[0] ? x[0] > y[0] : x[1] > y[1];
 }
 
+/** The first engine whose runtime understands `BootOptions.gateway`. */
+export const GATEWAY_MIN_ENGINE = '0.9';
+
+/**
+ * Whether `engine` is known to predate `gateway`. Only an exact tag can say so;
+ * a development build (`'dev'`) is assumed current.
+ */
+export function predatesGateway(engine: string): boolean {
+  return engineParts(engine) !== null && isNewerEngine(GATEWAY_MIN_ENGINE, engine);
+}
+
 /** The immutable runtime directory for an exact `X.Y`, with its trailing slash. */
 export function runtimeDir(version: string): string {
   return `${CDN_BASE}/sdk-v${version}/`;

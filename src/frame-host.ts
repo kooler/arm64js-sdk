@@ -59,6 +59,12 @@ export async function mountFrameHost(url: string, deps: FrameDeps = {}): Promise
   iframe.src = url;
   iframe.setAttribute('title', 'arm64js');
   iframe.setAttribute('aria-hidden', 'true');
+  // The VM's network worker runs in this frame. To reach a gateway on the user's
+  // own machine (`gateway: { url: 'ws://127.0.0.1:…' }`) Chrome asks the user for
+  // local network access, and a cross-origin frame may only ask when the page
+  // delegates it. All three names are Chrome's (it split the permission in 145);
+  // a browser that knows none of them ignores the attribute.
+  iframe.setAttribute('allow', 'local-network-access; local-network; loopback-network');
   // In the layout and on screen, never display:none: a hidden frame's timers are
   // throttled by the browser. The VM steps in workers, but the frame's main
   // thread still relays.
