@@ -116,7 +116,7 @@ export interface BootProgress {
 
 /**
  * An internet gateway the VM sends its traffic through: the `arm64js-gateway`
- * binary, run by whoever owns the page (https://arm64js.com/#internet-gateway).
+ * binary, run by whoever owns the page (https://arm64js.com/gateway/).
  */
 export interface GatewayOptions {
   /** `ws://127.0.0.1:4434` for a gateway on the user's machine, `wss://…` for one elsewhere. */

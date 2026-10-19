@@ -398,7 +398,7 @@ The name `host.internal` is the page itself: see `vm.listen` and `vm.serveHttp`.
 
 ### Internet gateway
 
-A browser cannot open TCP connections, so a VM reaches the internet through a gateway: a small program that takes the VM's connections over a WebSocket and opens them from the machine it runs on. Download `arm64js-gateway` for Linux or macOS from [arm64js.com](https://arm64js.com/#internet-gateway), start it, and pass its address when booting:
+A browser cannot open TCP connections, so a VM reaches the internet through a gateway: a small program that takes the VM's connections over a WebSocket and opens them from the machine it runs on. Download `arm64js-gateway` for Linux or macOS from [arm64js.com](https://arm64js.com/gateway/), start it, and pass its address when booting:
 
 ```sh
 ./arm64js-gateway --ws 127.0.0.1:4434
@@ -417,7 +417,7 @@ By default the gateway relays every connection from any page that reaches it, to
 
 Things to know:
 
-- Chrome asks the user to allow access to apps on their device the first time a page on another site connects to a gateway on `127.0.0.1`. A page served from `localhost` is not asked.
+- Chrome asks the user to allow access to apps on their device the first time a page connects to a gateway on the local machine or network. For that, the page has to be served over `https` (or from `localhost`, which is not asked). A gateway on a public address never triggers the prompt.
 - A gateway on another machine needs `wss://`: browsers block a plain `ws://` connection from an `https` page to anything but the local machine. Put it behind a TLS proxy such as Caddy.
 - DNS does not go through the gateway: it is resolved over HTTPS by the browser (Cloudflare's resolver). `apk` packages come from the CDN's mirror and use the gateway only when that download fails.
 - Needs engine 0.9 or newer. A snapshot saved on an older engine resumes on that engine, and booting it with `gateway` fails with `engine-mismatch` rather than starting a VM without internet access.
