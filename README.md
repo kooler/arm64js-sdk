@@ -120,6 +120,7 @@ A VM can be created either from a base image or your own local snapshot.
 
 - `image`: name of an image on the CDN ([all images](https://arm64js.com/images/)): `'alpine'` is the newest version of it, `'alpine:2'` a fixed one, `'alpine@sha256:<hash>'` an exact snapshot.
 - `snapshotId`: a snapshot id (`snap.id`, 64 hex characters) loads one of your own snapshots made previously.
+- `'demoshell:org/project:tag'` loads a public [Demoshell](https://demoshell.com) VM, if its owner's plan allows running it on other sites (paid or open source). The VM resumes as it was saved: one saved with an app running full-screen has that app on the console, so drive it with `vm.write()` rather than `exec`. Requires engine 0.11 or newer.
 
 Additionally, you can specify an `onProgress` callback to track VM loading phases and the number of virtual CPUs the VM will have (more is not always better).
 
